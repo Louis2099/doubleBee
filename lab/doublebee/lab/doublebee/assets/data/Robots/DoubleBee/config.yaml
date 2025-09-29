@@ -1,0 +1,66 @@
+# DoubleBee Robot Configuration
+# This file contains robot-specific parameters and joint limits
+# Following parameters are guessed and need to be adjusted
+# ❌ Mass Properties: 5.0 kg mass, center of mass, inertia - NOT in USD 
+# ❌ Effort/Velocity Limits: Based on typical motor specs - NOT in USD
+# ❌ Stiffness/Damping: Based on typical actuator characteristics - NOT in USD
+
+
+robot:
+  name: "DoubleBee"
+  version: "v1.0"
+  description: "Two-wheeled robot with propellers for enhanced mobility"
+
+# Joint specifications
+joints:
+  wheels:
+    leftWheel:
+      type: "revolute"
+      effort_limit: 50.0  # Nm
+      velocity_limit: 20.0  # rad/s
+      position_range: [-inf, inf]  # Continuous rotation
+    rightWheel:
+      type: "revolute"
+      effort_limit: 50.0  # Nm
+      velocity_limit: 20.0  # rad/s
+      position_range: [-inf, inf]  # Continuous rotation
+
+  propeller_servos:
+    leftPropellerServo:
+      type: "revolute"
+      effort_limit: 20.0  # Nm - ADJUST based on your servo specs
+      velocity_limit: 10.0  # rad/s - ADJUST based on your servo specs
+      position_range: [-1.57, 1.57]  # ±90 degrees - FROM USD FILE
+      axis: "Z"  # FROM USD FILE
+    rightPropellerServo:
+      type: "revolute"
+      effort_limit: 20.0  # Nm - ADJUST based on your servo specs
+      velocity_limit: 10.0  # rad/s - ADJUST based on your servo specs
+      position_range: [-1.57, 1.57]  # ±90 degrees - FROM USD FILE
+      axis: "Z"  # FROM USD FILE
+
+  propellers:
+    leftPropeller:
+      type: "revolute"
+      effort_limit: 100.0  # Nm - ADJUST based on your motor specs
+      velocity_limit: 50.0  # rad/s - ADJUST based on your motor specs
+      position_range: [-inf, inf]  # Continuous rotation - FROM USD FILE
+      axis: "Y"  # FROM USD FILE
+    rightPropeller:
+      type: "revolute"
+      effort_limit: 100.0  # Nm - ADJUST based on your motor specs
+      velocity_limit: 50.0  # rad/s - ADJUST based on your motor specs
+      position_range: [-inf, inf]  # Continuous rotation - FROM USD FILE
+      axis: "Y"  # FROM USD FILE
+
+# Physical properties
+physics:
+  mass: 5.0  # kg - adjust based on your robot
+  center_of_mass: [0.0, 0.0, 0.1]  # m - adjust based on your robot
+  inertia: [0.1, 0.1, 0.05]  # kg⋅m² - adjust based on your robot
+
+# Control parameters
+control:
+  wheel_control_mode: "velocity"  # or "position" or "effort"
+  propeller_servo_control_mode: "position"  # for precise angle control
+  propeller_control_mode: "velocity"  # for thrust control

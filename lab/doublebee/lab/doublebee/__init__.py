@@ -1,0 +1,10 @@
+# Copyright (c) 2022-2024, The Isaac Lab Project Developers.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""DoubleBee robot extension for Isaac Lab."""
+
+from . import assets, isaaclab, tasks
+
+__all__ = ["assets", "isaaclab", "tasks"]
