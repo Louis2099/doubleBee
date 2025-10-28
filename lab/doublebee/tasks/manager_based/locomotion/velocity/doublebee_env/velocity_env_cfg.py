@@ -37,6 +37,7 @@ class CommandsCfg:
         ranges=DoubleBeeVelocityCommandCfg.Ranges(
             lin_vel_x=(-1.0, 1.0),
             lin_vel_y=(-1.0, 1.0),
+            lin_vel_z=(-1.0, 1.0),  # Vertical velocity for drone
             ang_vel_z=(-1.0, 1.0),
         ),
     )

@@ -12,25 +12,64 @@ from isaaclab.utils import configclass
 
 @configclass
 class RewardsCfg:
-    """Reward specifications for DoubleBee robot."""
+    """Reward specifications for DoubleBee velocity tracking task."""
 
-    # Tracking rewards
-    tracking_lin_vel = RewTerm(
-        func=lambda env: torch.exp(-torch.sum(torch.square(env.scene["robot"].data.root_lin_vel_b[:, :2] - env.command_manager.get_command("base_velocity")[:, :2]), dim=1)),
+    # ========== Velocity Command Tracking Rewards ==========
+    
+    track_lin_vel_xy = RewTerm(
+        func=lambda env: torch.exp(
+            -torch.sum(
+                torch.square(
+                    env.scene["robot"].data.root_lin_vel_b[:, :2] 
+                    - env.command_manager.get_command("base_velocity")[:, :2]
+                ), 
+                dim=1
+            )
+        ),
         weight=1.0,
     )
-    """Linear velocity tracking reward."""
+    """Horizontal linear velocity tracking (x, y). Exponential reward: exp(-||v_xy - v_cmd_xy||²)"""
 
-    # Stability rewards
-    upright = RewTerm(
-        func=lambda env: torch.exp(-torch.sum(torch.square(env.scene["robot"].data.projected_gravity_b), dim=1)),
+    track_lin_vel_z = RewTerm(
+        func=lambda env: torch.exp(
+            -torch.square(
+                env.scene["robot"].data.root_lin_vel_b[:, 2] 
+                - env.command_manager.get_command("base_velocity")[:, 2]
+            )
+        ),
         weight=1.0,
     )
-    """Upright orientation reward."""
+    """Vertical linear velocity tracking (z). Exponential reward: exp(-||v_z - v_cmd_z||²)"""
 
-    # Energy efficiency
-    energy = RewTerm(
-        func=lambda env: -torch.sum(torch.square(env.scene["robot"].data.joint_torques), dim=1),
-        weight=0.01,
+    track_ang_vel_z = RewTerm(
+        func=lambda env: torch.exp(
+            -torch.square(
+                env.scene["robot"].data.root_ang_vel_b[:, 2] 
+                - env.command_manager.get_command("base_velocity")[:, 3]
+            )
+        ),
+        weight=0.5,
     )
-    """Energy efficiency reward."""
+    """Yaw angular velocity tracking. Exponential reward: exp(-||ω_z - ω_cmd_z||²)"""
+
+    # ========== Efficiency Rewards ==========
+    
+    propeller_efficiency = RewTerm(
+        func=lambda env: -torch.sum(
+            torch.square(
+                env.scene["robot"].data.joint_vel[:, 
+                    [env.scene["robot"].joint_names.index("leftPropeller"),
+                     env.scene["robot"].joint_names.index("rightPropeller")]
+                ]
+            ),
+            dim=1
+        ),
+        weight=0.0001,
+    )
+    """Penalize excessive propeller speeds. Since thrust ∝ ω², high speeds are inefficient."""
+
+    action_smoothness = RewTerm(
+        func=lambda env: -torch.sum(torch.square(env.action_manager.action), dim=1),
+        weight=0.001,
+    )
+    """Penalize large action magnitudes to encourage smooth, energy-efficient control."""

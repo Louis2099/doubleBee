@@ -19,7 +19,8 @@ if TYPE_CHECKING:
 class DoubleBeeVelocityCommand(UniformVelocityCommand):
     def __init__(self, cfg: UniformVelocityCommandCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
-        self.vel_command_b = torch.zeros(self.num_envs, 3, device=self.device)
+        # Command: [lin_vel_x, lin_vel_y, lin_vel_z, ang_vel_z]
+        self.vel_command_b = torch.zeros(self.num_envs, 4, device=self.device)
 
     @property
     def command(self) -> torch.Tensor:
@@ -29,7 +30,8 @@ class DoubleBeeVelocityCommand(UniformVelocityCommand):
         r = torch.empty(len(env_ids), device=self.device)
         self.vel_command_b[env_ids, 0] = r.uniform_(*self.cfg.ranges.lin_vel_x)
         self.vel_command_b[env_ids, 1] = r.uniform_(*self.cfg.ranges.lin_vel_y)
-        self.vel_command_b[env_ids, 2] = r.uniform_(*self.cfg.ranges.ang_vel_z)
+        self.vel_command_b[env_ids, 2] = r.uniform_(*self.cfg.ranges.lin_vel_z)
+        self.vel_command_b[env_ids, 3] = r.uniform_(*self.cfg.ranges.ang_vel_z)
 
     def _update_command(self):
         reset_env_ids = self._env.reset_buf.nonzero(as_tuple=False).flatten()
@@ -43,6 +45,7 @@ class DoubleBeeVelocityCommandCfg(UniformVelocityCommandCfg):
     ranges: UniformVelocityCommandCfg.Ranges = UniformVelocityCommandCfg.Ranges(
         lin_vel_x=(-1.0, 1.0),
         lin_vel_y=(-1.0, 1.0),
+        lin_vel_z=(-1.0, 1.0),  # Vertical velocity for drone
         ang_vel_z=(-1.0, 1.0),
     )
     resampling_time_range: tuple[float, float] = (6.0, 8.0)
