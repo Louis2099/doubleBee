@@ -11,7 +11,7 @@ from lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env_cfg im
 )
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.terrains import TerrainImporterCfg
-from isaaclab.sensors import RayCasterCfg, patterns
+from isaaclab.sensors import RayCasterCfg, ContactSensorCfg, patterns
 import isaaclab.sim as sim_utils
 from isaaclab.utils import configclass
 from lab.doublebee.assets.doublebee import DOUBLEBEE_CFG
@@ -81,6 +81,13 @@ class DoubleBeeVelocityEnvCfg(ManagerBasedConstraintRLEnvCfg):
             ),
             debug_vis=True,  # Visualize rays in simulator
             mesh_prim_paths=["/World/ground"],  # Raycast against terrain
+        )
+        
+        # Contact sensor for wheel-ground contact detection
+        contact_forces = ContactSensorCfg(
+            prim_path="{ENV_REGEX_NS}/Doublebee/.*",  # Monitor all robot bodies
+            history_length=3,  # Keep last 3 timesteps of contact data
+            track_air_time=True,  # Track how long wheels have been in air
         )
         
         # Lighting (to make robot visible)

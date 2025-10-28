@@ -13,7 +13,7 @@ from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.sensors import RayCaster
+from isaaclab.sensors import RayCaster, ContactSensor
 from isaaclab.utils import configclass
 
 if TYPE_CHECKING:
@@ -159,6 +159,73 @@ def propeller_velocities(
         return torch.zeros((env.num_envs, 2), device=env.device)
 
 
+def wheel_contact(
+    env: ManagerBasedEnv,
+    sensor_cfg: SceneEntityCfg,
+    threshold: float = 1.0,
+) -> torch.Tensor:
+    """Binary contact detection for DoubleBee wheels (per-wheel).
+    
+    Detects if each wheel is in contact with the ground by checking contact forces.
+    Returns separate binary values for left and right wheels.
+    
+    Args:
+        env: The environment instance
+        sensor_cfg: Configuration for contact sensor with body_names for wheels
+        threshold: Force threshold in Newtons to consider as contact (default: 1.0N)
+    
+    Returns:
+        Binary contact indicators. Shape: (num_envs, 2)
+        - [left_wheel_contact, right_wheel_contact]
+        - 1.0 = wheel in contact with ground
+        - 0.0 = wheel not touching ground (airborne)
+    
+    Example:
+        [1.0, 1.0] = both wheels on ground (normal driving)
+        [0.0, 0.0] = both wheels airborne (jumping/flying)
+        [1.0, 0.0] = only left wheel touching (tipped right)
+        [0.0, 1.0] = only right wheel touching (tipped left)
+    """
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    
+    # Get contact forces on all bodies
+    # net_forces_w_history shape: (num_envs, history_length, num_bodies, 3)
+    net_contact_forces = contact_sensor.data.net_forces_w_history
+    
+    # Get the articulation to find wheel body indices
+    asset: Articulation = env.scene["robot"]
+    
+    # Find left and right wheel body indices
+    left_wheel_ids = asset.find_bodies("leftWheel")[0]
+    right_wheel_ids = asset.find_bodies("rightWheel")[0]
+    
+    # Extract forces for each wheel
+    # Shape: (num_envs, history_length, 3) for each wheel
+    if len(left_wheel_ids) > 0 and len(right_wheel_ids) > 0:
+        left_wheel_forces = net_contact_forces[:, :, left_wheel_ids[0], :]
+        right_wheel_forces = net_contact_forces[:, :, right_wheel_ids[0], :]
+        
+        # Compute force magnitudes: sqrt(fx^2 + fy^2 + fz^2)
+        left_force_mags = torch.norm(left_wheel_forces, dim=-1)   # (num_envs, history_length)
+        right_force_mags = torch.norm(right_wheel_forces, dim=-1)  # (num_envs, history_length)
+        
+        # Get maximum force over history for each wheel
+        left_max_force = torch.max(left_force_mags, dim=1)[0]   # (num_envs,)
+        right_max_force = torch.max(right_force_mags, dim=1)[0]  # (num_envs,)
+        
+        # Binary contact for each wheel
+        left_contact = (left_max_force > threshold).float()
+        right_contact = (right_max_force > threshold).float()
+        
+        # Stack into shape (num_envs, 2)
+        wheel_contacts = torch.stack([left_contact, right_contact], dim=-1)
+    else:
+        # Fallback: return zeros if wheels not found
+        wheel_contacts = torch.zeros((env.num_envs, 2), device=env.device)
+    
+    return wheel_contacts
+
+
 ##
 # Observation Configuration
 ##
@@ -187,10 +254,11 @@ class ObservationsCfg:
         5. Base angular velocity (3) - Robot rotation rates [wx, wy, wz]
         6. Base orientation (3) - Projected gravity vector (encodes roll/pitch)
         7. Height scan (36) - 6x6 elevation map around robot
-        8. Velocity commands (3) - Desired velocities [vx, vy, wz]
-        9. Last actions (N) - Previous control actions
+        8. Wheel-ground contact (2) - Binary per wheel: [left, right] (1.0=contact, 0.0=airborne)
+        9. Velocity commands (3) - Desired velocities [vx, vy, wz]
+        10. Last actions (N) - Previous control actions
         
-        Total observations: ~57+ dimensions (exact count depends on action space)
+        Total observations: ~59+ dimensions (exact count depends on action space)
         """
 
         # ========================================
@@ -248,6 +316,15 @@ class ObservationsCfg:
                 "offset": 0.0,  # No offset, raw heights
             },
             clip=(-1.0, 1.0),  # Clip to reasonable height range
+        )
+        
+        # Wheel contact - Binary indicator if wheels touch ground
+        wheel_ground_contact = ObsTerm(
+            func=wheel_contact,
+            params={
+                "sensor_cfg": SceneEntityCfg("contact_forces"),
+                "threshold": 1.0,  # 1.0 Newton threshold
+            },
         )
 
         # ========================================
