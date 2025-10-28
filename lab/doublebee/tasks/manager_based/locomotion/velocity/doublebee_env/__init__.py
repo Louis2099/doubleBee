@@ -7,7 +7,8 @@
 
 import gymnasium as gym
 
-from . import agents, flat_env
+from . import agents
+from .flat_env.stand_drive.flat_env_stand_drive_cfg import DoubleBeeFlatStandDriveCfg
 from .velocity_env_cfg import DoubleBeeVelocityEnvCfg
 
 ##
@@ -20,7 +21,7 @@ gym.register(
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": flat_env.stand_drive.flat_env_stand_drive_cfg.DoubleBeeFlatStandDriveCfg,
+        "env_cfg_entry_point": DoubleBeeFlatStandDriveCfg,
         "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
     },
 )
@@ -30,7 +31,7 @@ gym.register(
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": flat_env.stand_drive.flat_env_stand_drive_cfg.DoubleBeeFlatStandDriveCfg,
+        "env_cfg_entry_point": DoubleBeeFlatStandDriveCfg,
         "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
     },
 )

@@ -3,7 +3,7 @@
 import os
 import toml
 
-from setuptools import setup
+from setuptools import setup, find_namespace_packages
 
 # Obtain the extension data from the extension.toml file
 EXTENSION_PATH = os.path.dirname(os.path.realpath(__file__))
@@ -22,7 +22,7 @@ setup(
     # TODO: Change your package naming
     # -----------------------------------------------------------------
     name="lab.flamingo",
-    packages=["lab.flamingo"],
+    packages=find_namespace_packages(include=["lab.*"]),
     # -----------------------------------------------------------------
     author=EXTENSION_TOML_DATA["package"]["author"],
     maintainer=EXTENSION_TOML_DATA["package"]["maintainer"],

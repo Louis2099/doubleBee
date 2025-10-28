@@ -12,7 +12,8 @@ from isaaclab.app import AppLauncher
 
 # local imports
 import cli_args  # isort: skip
-from scripts.co_rl.core.runners import OffPolicyRunner
+# from scripts.co_rl.core.runners import OffPolicyRunner
+from core.runners import OffPolicyRunner
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with CO-RL.")
@@ -76,6 +77,7 @@ from scripts.co_rl.core.wrapper import CoRlPolicyRunnerCfg, CoRlVecEnvWrapper
 
 # Import extensions to set up environment tasks
 import lab.flamingo.tasks  # noqa: F401  TODO: import orbit.<your_extension_name>
+import lab.doublebee.tasks  # noqa: F401
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True

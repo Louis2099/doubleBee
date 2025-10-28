@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from isaaclab.managers import CurriculumTermCfg as CurriculumTerm
 from isaaclab.utils import configclass
 
 

@@ -14,23 +14,18 @@ from isaaclab.utils import configclass
 class TerminationsCfg:
     """Termination specifications for DoubleBee robot."""
 
-    # Episode timeout
     time_out = DoneTerm(
-        func=lambda env: env.episode_length_buf >= env.max_episode_length,
-        mode="truncate",
+        func=lambda env, env_ids=None: env.episode_length_buf >= env.max_episode_length,
+        time_out=True,
     )
     """Episode timeout termination."""
 
-    # Falling termination
     fall = DoneTerm(
-        func=lambda env: env.scene["robot"].data.root_lin_vel_b[:, 2] < -0.5,
-        mode="terminate",
+        func=lambda env, env_ids=None: env.scene["robot"].data.root_lin_vel_b[:, 2] < -0.5,
     )
     """Falling termination."""
 
-    # Excessive tilt termination
     tilt = DoneTerm(
-        func=lambda env: torch.sum(torch.square(env.scene["robot"].data.projected_gravity_b), dim=1) > 0.5,
-        mode="terminate",
+        func=lambda env, env_ids=None: torch.sum(torch.square(env.scene["robot"].data.projected_gravity_b), dim=1) > 0.5,
     )
     """Excessive tilt termination."""

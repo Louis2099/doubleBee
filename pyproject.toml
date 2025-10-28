@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "toml"]
+requires = ["setuptools>=65", "wheel", "toml"]
 build-backend = "setuptools.build_meta"
 
 [tool.isort]

@@ -8,7 +8,7 @@
 import os
 
 # Conveniences to other module directories via relative paths
-DOUBLEBEE_ASSETS_EXT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../"))
+DOUBLEBEE_ASSETS_EXT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../"))
 """Path to the extension source directory."""
 
 DOUBLEBEE_ASSETS_DATA_DIR = os.path.join(DOUBLEBEE_ASSETS_EXT_DIR, "data")

@@ -10,11 +10,15 @@ import torch
 from collections import deque
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
+import sys
+# print(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../")))
 from scripts import co_rl
 from scripts.co_rl.core.algorithms import PPO
 from scripts.co_rl.core.env import VecEnv
 from scripts.co_rl.core.modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
 from scripts.co_rl.core.utils import store_code_state
+
 
 
 class OnPolicyRunner:

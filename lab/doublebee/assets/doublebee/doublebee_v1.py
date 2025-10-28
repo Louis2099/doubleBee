@@ -15,19 +15,13 @@ DOUBLEBEE_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=f"{DOUBLEBEE_ASSETS_DATA_DIR}/Robots/DoubleBee/doubleBee.usd",
         activate_contact_sensors=True,
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=False,
-            retain_accelerations=False,
-            linear_damping=0.0,
-            angular_damping=0.0,
-            max_linear_velocity=1000.0,
-            max_angular_velocity=1000.0,
-            max_depenetration_velocity=1.0,
-        ),
-        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            enabled_self_collisions=False, 
-            solver_position_iteration_count=4, 
-            solver_velocity_iteration_count=0
+        visible=True,  # Ensure visibility is enabled
+        scale=(1.0, 1.0, 1.0),  # Explicit scale
+        visual_material=sim_utils.PreviewSurfaceCfg(
+            diffuse_color=(0.9, 0.7, 0.3),  # Brighter orange/yellow
+            metallic=0.0,  # No metallic (metals appear black without proper lighting)
+            roughness=0.4,  # Some roughness for better visibility
+            emissive_color=(0.1, 0.05, 0.0),  # Slight glow
         ),
     ),
 

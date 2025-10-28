@@ -6,7 +6,11 @@
 from __future__ import annotations
 
 from isaaclab.utils import configclass
-from scripts.co_rl.core.wrapper import CoRlPolicyRunnerCfg
+from scripts.co_rl.core.wrapper import (
+    CoRlPolicyRunnerCfg,
+    CoRlPpoActorCriticCfg,
+    CoRlPpoAlgorithmCfg,
+)
 
 
 @configclass
@@ -19,33 +23,28 @@ class DoubleBeeCoRlCfg(CoRlPolicyRunnerCfg):
     description: str = "DoubleBee robot velocity control with propellers"
 
     # Algorithm settings
-    algorithm: CoRlPolicyRunnerCfg.AlgorithmCfg = CoRlPolicyRunnerCfg.AlgorithmCfg(
-        class_name="PPO",
+    empirical_normalization: bool = False
+    policy: CoRlPpoActorCriticCfg = CoRlPpoActorCriticCfg(
+        init_noise_std=1.0,
+        actor_hidden_dims=[512, 256, 128],
+        critic_hidden_dims=[512, 256, 128],
+        activation="tanh",
+    )
+    algorithm: CoRlPpoAlgorithmCfg = CoRlPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.01,
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=3.0e-4,
+        schedule="adaptive",
         gamma=0.99,
         lam=0.95,
-        value_loss_coef=1.0,
-        entropy_coef=0.01,
-        clip_range=0.2,
+        desired_kl=0.01,
         max_grad_norm=1.0,
     )
-
-    # Policy settings
-    policy: CoRlPolicyRunnerCfg.PolicyCfg = CoRlPolicyRunnerCfg.PolicyCfg(
-        class_name="ActorCritic",
-        hidden_sizes=[512, 256, 128],
-        activation="tanh",
-        init_noise_std=1.0,
-    )
-
-    # Value settings
-    value: CoRlPolicyRunnerCfg.ValueCfg = CoRlPolicyRunnerCfg.ValueCfg(
-        class_name="Critic",
-        hidden_sizes=[512, 256, 128],
-        activation="tanh",
-    )
+    num_steps_per_env: int = 24
 
     # Training settings
     max_iterations: int = 5000
