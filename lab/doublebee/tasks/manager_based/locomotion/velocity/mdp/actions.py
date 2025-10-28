@@ -17,7 +17,7 @@ class ActionsCfg:
     wheel_vel = mdp.JointVelocityActionCfg(
         asset_name="robot",
         joint_names=["leftWheel", "rightWheel"],
-        scale=20.0,
+        scale=200.0,
         use_default_offset=False,
         preserve_order=True,
     )
@@ -26,7 +26,7 @@ class ActionsCfg:
     propeller_servo_pos = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=["leftPropellerServo", "rightPropellerServo"],
-        scale=1.0,
+        scale=2.0,
         use_default_offset=False,
         preserve_order=True,
     )
@@ -35,7 +35,7 @@ class ActionsCfg:
     propeller_vel = mdp.JointVelocityActionCfg(
         asset_name="robot",
         joint_names=["leftPropeller", "rightPropeller"],
-        scale=20.0,
+        scale=600.0,
         use_default_offset=False,
         preserve_order=True,
     )

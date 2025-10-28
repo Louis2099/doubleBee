@@ -173,8 +173,9 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
             A tuple containing the observations, rewards, resets (terminated and truncated) and extras.
         """
         # process actions
+        # print(f"[INTERNAL CHECK] Action passed to the env.step(): {action}", flush=True)
         self.action_manager.process_action(action.to(self.device))
-
+        # print(f"[INTERNAL CHECK] Action manager processed action: {self.action_manager.action}", flush=True)
         self.recorder_manager.record_pre_step()
 
         # check if we need to do rendering within the physics loop

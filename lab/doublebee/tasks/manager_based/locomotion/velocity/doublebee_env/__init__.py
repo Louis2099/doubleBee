@@ -18,7 +18,8 @@ from .velocity_env_cfg import DoubleBeeVelocityEnvCfg
 # Register DoubleBee velocity control tasks
 gym.register(
     id="Isaac-Velocity-Flat-DoubleBee-v1-ppo",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    # entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": DoubleBeeFlatStandDriveCfg,

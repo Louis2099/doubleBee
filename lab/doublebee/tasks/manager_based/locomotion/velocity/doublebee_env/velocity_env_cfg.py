@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 from isaaclab.assets import AssetBaseCfg
-from isaaclab.envs import ManagerBasedRLEnvCfg
+from lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env_cfg import (
+    ManagerBasedConstraintRLEnvCfg,
+)
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.terrains import TerrainImporterCfg
+from isaaclab.sensors import RayCasterCfg, patterns
 import isaaclab.sim as sim_utils
 from isaaclab.utils import configclass
 from lab.doublebee.assets.doublebee import DOUBLEBEE_CFG
@@ -40,7 +43,7 @@ class CommandsCfg:
 
 
 @configclass
-class DoubleBeeVelocityEnvCfg(ManagerBasedRLEnvCfg):
+class DoubleBeeVelocityEnvCfg(ManagerBasedConstraintRLEnvCfg):
     """Configuration for the DoubleBee velocity control environment."""
 
     episode_length_s: float = 20.0
@@ -66,6 +69,20 @@ class DoubleBeeVelocityEnvCfg(ManagerBasedRLEnvCfg):
         # Robot
         robot = DOUBLEBEE_CFG.replace(prim_path="/World/envs/env_.*/Doublebee")
         
+        # Sensors
+        # Height scanner for 6x6 elevation map around the robot
+        height_scanner = RayCasterCfg(
+            prim_path="{ENV_REGEX_NS}/Doublebee/base",  # Attach to robot base
+            offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),  # Cast rays from 20m above
+            attach_yaw_only=True,  # Only follow yaw rotation, not roll/pitch
+            pattern_cfg=patterns.GridPatternCfg(
+                resolution=0.07,  # 7cm spacing between rays
+                size=[0.35, 0.35]  # 35cm x 35cm square → 6x6 grid (36 rays)
+            ),
+            debug_vis=True,  # Visualize rays in simulator
+            mesh_prim_paths=["/World/ground"],  # Raycast against terrain
+        )
+        
         # Lighting (to make robot visible)
         light = AssetBaseCfg(
             prim_path="/World/light",
@@ -90,6 +107,16 @@ class DoubleBeeVelocityEnvCfg(ManagerBasedRLEnvCfg):
     rewards: DoubleBeeRewardsCfg = DoubleBeeRewardsCfg()
     terminations: DoubleBeeTerminationsCfg = DoubleBeeTerminationsCfg()
     curriculum: DoubleBeeCurriculumCfg = DoubleBeeCurriculumCfg()
+    
+    # Constraints manager configuration (required by ManagerBasedConstraintRLEnv)
+    @configclass
+    class ConstraintsCfg:
+        """Minimal constraints configuration placeholder.
+        Add constraint terms here as needed (e.g., timeouts, safety limits).
+        """
+        pass
+
+    constraints: ConstraintsCfg = ConstraintsCfg()
 
     def __post_init__(self):
         self.sim.dt = 0.005
