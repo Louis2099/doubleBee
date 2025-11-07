@@ -115,8 +115,9 @@ class DoubleBeeFlatStandDriveCfg(DoubleBeeVelocityEnvCfg):
         # Call parent post_init
         super().__post_init__()
         
-        # Override scene settings
-        self.scene.robot = DOUBLEBEE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        # Override scene settings - keep prim_path consistent with sensors
+        # Use Doublebee (not Robot) to match the actual robot name
+        self.scene.robot = DOUBLEBEE_CFG.replace(prim_path="{ENV_REGEX_NS}/Doublebee")
         
         # Episode settings
         self.episode_length_s = 20.0

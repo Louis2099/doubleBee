@@ -104,7 +104,14 @@ def wheel_velocities(
     wheel_indices = []
     for joint_name in ["leftWheel", "rightWheel"]:
         joint_ids = asset.find_joints(joint_name)[0]
-        wheel_indices.extend(joint_ids.tolist())
+        # Safely convert to list (handle both tensor and list)
+        if isinstance(joint_ids, torch.Tensor):
+            wheel_indices.extend(joint_ids.cpu().tolist())
+        elif isinstance(joint_ids, (list, tuple)):
+            wheel_indices.extend(list(joint_ids))
+        else:
+            # Single value or other type
+            wheel_indices.append(int(joint_ids))
     
     if len(wheel_indices) > 0:
         return asset.data.joint_vel[:, wheel_indices]
@@ -127,7 +134,14 @@ def servo_positions(
     servo_indices = []
     for joint_name in ["leftPropellerServo", "rightPropellerServo"]:
         joint_ids = asset.find_joints(joint_name)[0]
-        servo_indices.extend(joint_ids.tolist())
+        # Safely convert to list (handle both tensor and list)
+        if isinstance(joint_ids, torch.Tensor):
+            servo_indices.extend(joint_ids.cpu().tolist())
+        elif isinstance(joint_ids, (list, tuple)):
+            servo_indices.extend(list(joint_ids))
+        else:
+            # Single value or other type
+            servo_indices.append(int(joint_ids))
     
     if len(servo_indices) > 0:
         return asset.data.joint_pos[:, servo_indices]
@@ -150,7 +164,14 @@ def propeller_velocities(
     propeller_indices = []
     for joint_name in ["leftPropeller", "rightPropeller"]:
         joint_ids = asset.find_joints(joint_name)[0]
-        propeller_indices.extend(joint_ids.tolist())
+        # Safely convert to list (handle both tensor and list)
+        if isinstance(joint_ids, torch.Tensor):
+            propeller_indices.extend(joint_ids.cpu().tolist())
+        elif isinstance(joint_ids, (list, tuple)):
+            propeller_indices.extend(list(joint_ids))
+        else:
+            # Single value or other type
+            propeller_indices.append(int(joint_ids))
     
     if len(propeller_indices) > 0:
         return asset.data.joint_vel[:, propeller_indices]

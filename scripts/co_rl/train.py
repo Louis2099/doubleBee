@@ -33,14 +33,11 @@ parser.add_argument("--num_critic_stacks", type=int, default=2, help="Number of 
 cli_args.add_co_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
-args_cli, hydra_args = parser.parse_known_args()
+args_cli = parser.parse_args()
 
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
-
-# clear out sys.argv for Hydra
-sys.argv = [sys.argv[0]] + hydra_args
 
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
@@ -50,6 +47,7 @@ simulation_app = app_launcher.app
 
 import gymnasium as gym
 import os
+import pickle
 import torch
 from datetime import datetime
 
@@ -57,19 +55,15 @@ from core.runners import OnPolicyRunner, SRMOnPolicyRunner
 
 from isaaclab.envs import (
     DirectMARLEnv,
-    DirectMARLEnvCfg,
-    DirectRLEnvCfg,
-    ManagerBasedRLEnvCfg,
     multi_agent_to_single_agent,
 )
-from lab.flamingo.isaaclab.isaaclab.envs import ManagerBasedConstraintRLEnv, ManagerBasedConstraintRLEnvCfg
+from lab.flamingo.isaaclab.isaaclab.envs import ManagerBasedConstraintRLEnv
 
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_pickle, dump_yaml
 
 import isaaclab_tasks  # noqa: F401
-from isaaclab_tasks.utils import get_checkpoint_path
-from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
 
 """Use CO-RL Wrapper."""
 from scripts.co_rl.core.wrapper import CoRlPolicyRunnerCfg, CoRlVecEnvWrapper
@@ -85,10 +79,20 @@ torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
 
-@hydra_task_config(args_cli.task, "co_rl_cfg_entry_point")
-def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg | ManagerBasedConstraintRLEnvCfg, agent_cfg: CoRlPolicyRunnerCfg):
+def main():
     """Train with CO-RL agent."""
-    # override configurations with non-hydra CLI arguments
+    # Load environment configuration using parse_env_cfg (same as play.py - no Hydra)
+    env_cfg = parse_env_cfg(
+        args_cli.task,
+        device="cuda:0",
+        num_envs=args_cli.num_envs if args_cli.num_envs is not None else 4096,
+        use_fabric=False,
+    )
+    
+    # Load agent configuration using the same method as play.py
+    agent_cfg: CoRlPolicyRunnerCfg = cli_args.parse_co_rl_cfg(args_cli.task, args_cli)
+    
+    # override configurations with CLI arguments
     agent_cfg = cli_args.update_co_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
@@ -118,12 +122,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg | Man
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
+    # Debug: Check environment type before wrapping
+    print(f"[DEBUG] Environment type after gym.make: {type(env)}")
+    print(f"[DEBUG] Environment unwrapped type: {type(env.unwrapped)}")
+    
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
+        print(f"[DEBUG] After multi_agent_to_single_agent: {type(env)}, unwrapped: {type(env.unwrapped)}")
     
     if isinstance(env.unwrapped, ManagerBasedConstraintRLEnv):
         agent_cfg.use_constraint_rl = True
+        print(f"[DEBUG] Detected ManagerBasedConstraintRLEnv, setting use_constraint_rl=True")
 
     # save resume path before creating a new log_dir
     if agent_cfg.resume:
@@ -140,7 +150,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg | Man
         print("[INFO] Recording videos during training.")
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
+        print(f"[DEBUG] After RecordVideo wrapper: {type(env)}, unwrapped: {type(env.unwrapped)}")
+    
     # wrap around environment for co-rl
+    print(f"[DEBUG] Before CoRlVecEnvWrapper: env type={type(env)}, unwrapped type={type(env.unwrapped)}")
     env = CoRlVecEnvWrapper(env, agent_cfg)
     # create runner from co-rl
     if is_off_policy:
@@ -166,8 +179,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg | Man
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
+    
+    # Try to dump pickle files, but skip if they contain unpicklable objects (e.g., lambda functions)
+    try:
+        dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
+    except (pickle.PicklingError, AttributeError) as e:
+        print(f"[WARNING] Could not pickle env_cfg: {e}")
+        print("[INFO] Environment configuration saved as YAML only. This is normal if config contains lambda functions.")
+    
+    try:
+        dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
+    except (pickle.PicklingError, AttributeError) as e:
+        print(f"[WARNING] Could not pickle agent_cfg: {e}")
+        print("[INFO] Agent configuration saved as YAML only.")
 
     # run training
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)

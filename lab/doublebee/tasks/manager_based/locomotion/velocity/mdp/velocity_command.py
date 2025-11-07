@@ -41,8 +41,18 @@ class DoubleBeeVelocityCommand(UniformVelocityCommand):
 
 @configclass
 class DoubleBeeVelocityCommandCfg(UniformVelocityCommandCfg):
+    """Configuration for DoubleBee velocity command with vertical velocity support."""
+    
     class_type: type = DoubleBeeVelocityCommand
-    ranges: UniformVelocityCommandCfg.Ranges = UniformVelocityCommandCfg.Ranges(
+    
+    @configclass
+    class Ranges(UniformVelocityCommandCfg.Ranges):
+        """Uniform distribution ranges for velocity commands including vertical velocity."""
+        
+        lin_vel_z: tuple[float, float] = (-1.0, 1.0)
+        """Range for the linear velocity in z-direction (vertical velocity for drone)."""
+    
+    ranges: Ranges = Ranges(
         lin_vel_x=(-1.0, 1.0),
         lin_vel_y=(-1.0, 1.0),
         lin_vel_z=(-1.0, 1.0),  # Vertical velocity for drone

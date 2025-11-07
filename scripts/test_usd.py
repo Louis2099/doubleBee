@@ -188,6 +188,11 @@ def main() -> None:
 
         # Test joint movement capabilities
         test_joint_movement = not args_cli.hover
+        # Initialize joint IDs as None - will be set if joint movement test succeeds
+        wheel_ids = None
+        servo_ids = None
+        propeller_ids = None
+        
         if test_joint_movement:
             print(f"\n{'='*80}", flush=True)
             print(f"JOINT MOVEMENT TEST", flush=True)
@@ -283,9 +288,40 @@ def main() -> None:
                 servo_ids = torch.tensor([joint_names.index(j) for j in found_servos], device=robot.device) if found_servos else None
                 propeller_ids = torch.tensor([joint_names.index(j) for j in found_propellers], device=robot.device) if found_propellers else None
                 
-                print(f"[JOINT] Wheel joint indices: {wheel_ids.tolist() if wheel_ids is not None else 'None'}", flush=True)
-                print(f"[JOINT] Servo joint indices: {servo_ids.tolist() if servo_ids is not None else 'None'}", flush=True)
-                print(f"[JOINT] Propeller joint indices: {propeller_ids.tolist() if propeller_ids is not None else 'None'}", flush=True)
+                # Safely convert to list (handle both tensor and list)
+                if wheel_ids is not None:
+                    if isinstance(wheel_ids, torch.Tensor):
+                        wheel_ids_list = wheel_ids.cpu().tolist()
+                    elif isinstance(wheel_ids, (list, tuple)):
+                        wheel_ids_list = list(wheel_ids)
+                    else:
+                        wheel_ids_list = list(wheel_ids) if hasattr(wheel_ids, '__iter__') else [wheel_ids]
+                else:
+                    wheel_ids_list = 'None'
+                    
+                if servo_ids is not None:
+                    if isinstance(servo_ids, torch.Tensor):
+                        servo_ids_list = servo_ids.cpu().tolist()
+                    elif isinstance(servo_ids, (list, tuple)):
+                        servo_ids_list = list(servo_ids)
+                    else:
+                        servo_ids_list = list(servo_ids) if hasattr(servo_ids, '__iter__') else [servo_ids]
+                else:
+                    servo_ids_list = 'None'
+                    
+                if propeller_ids is not None:
+                    if isinstance(propeller_ids, torch.Tensor):
+                        prop_ids_list = propeller_ids.cpu().tolist()
+                    elif isinstance(propeller_ids, (list, tuple)):
+                        prop_ids_list = list(propeller_ids)
+                    else:
+                        prop_ids_list = list(propeller_ids) if hasattr(propeller_ids, '__iter__') else [propeller_ids]
+                else:
+                    prop_ids_list = 'None'
+                    
+                print(f"[JOINT] Wheel joint indices: {wheel_ids_list}", flush=True)
+                print(f"[JOINT] Servo joint indices: {servo_ids_list}", flush=True)
+                print(f"[JOINT] Propeller joint indices: {prop_ids_list}", flush=True)
                 
                 # Check action space - get the actual action space from the unwrapped environment
                 try:
@@ -343,7 +379,18 @@ def main() -> None:
                                 
                                 # Get actual joint indices
                                 if hasattr(term, '_joint_ids'):
-                                    joint_ids = term._joint_ids[0].cpu().tolist()  # First env
+                                    # Safely convert to list (handle both tensor and list)
+                                    joint_ids_raw = term._joint_ids[0]  # First env
+                                    if isinstance(joint_ids_raw, torch.Tensor):
+                                        joint_ids = joint_ids_raw.cpu().tolist()
+                                    elif isinstance(joint_ids_raw, (list, tuple)):
+                                        joint_ids = list(joint_ids_raw)
+                                    elif hasattr(joint_ids_raw, 'cpu'):
+                                        joint_ids = joint_ids_raw.cpu().tolist()
+                                    elif hasattr(joint_ids_raw, 'tolist'):
+                                        joint_ids = joint_ids_raw.tolist()
+                                    else:
+                                        joint_ids = list(joint_ids_raw) if isinstance(joint_ids_raw, (list, tuple)) else [joint_ids_raw]
                                     actual_joints = [robot.joint_names[i] for i in joint_ids]
                                     print(f"         Actual mapped joints: {actual_joints}", flush=True)
                                     print(f"         Joint indices: {joint_ids}", flush=True)
@@ -422,6 +469,10 @@ def main() -> None:
             except Exception as e:
                 print(f"[JOINT] Warning: Could not setup joint movement test: {e}", flush=True)
                 test_joint_movement = False
+                # Reset IDs to None on error
+                wheel_ids = None
+                servo_ids = None
+                propeller_ids = None
         
         # If hover mode requested, run the hover test session and exit
         if args_cli.hover:
@@ -669,14 +720,10 @@ def main() -> None:
                         pos = physx_pos
                         vel = physx_vel
                         
-                        if step == 0 or (step % 20 == 0 and step < 100):
-                            print(f"[DEBUG] PhysX direct read - Pos: {pos[:2]}, Vel: {vel[:2]}", flush=True)
                     except Exception as e:
                         # Fallback to robot.data if PhysX read fails
                         pos = robot.data.joint_pos[0].cpu().numpy()
                         vel = robot.data.joint_vel[0].cpu().numpy()
-                        if step == 0:
-                            print(f"[DEBUG] PhysX direct read failed: {e}, using robot.data", flush=True)
                     
                     joint_positions.append(pos.copy())
                     joint_velocities.append(vel.copy())
@@ -718,16 +765,37 @@ def main() -> None:
                     if step % 20 == 0:
                         print(f"\n[JOINT] Step {step:3d}: Phase={test_phase}", flush=True)
                         if wheel_ids is not None:
-                            wheel_pos = pos[wheel_ids.cpu().numpy()]
-                            wheel_vel = vel[wheel_ids.cpu().numpy()]
+                            # Safely convert to numpy array (handle both tensor and list)
+                            if hasattr(wheel_ids, 'cpu'):
+                                wheel_ids_np = wheel_ids.cpu().numpy()
+                            elif hasattr(wheel_ids, 'numpy'):
+                                wheel_ids_np = wheel_ids.numpy()
+                            else:
+                                wheel_ids_np = np.array(wheel_ids)
+                            wheel_pos = pos[wheel_ids_np]
+                            wheel_vel = vel[wheel_ids_np]
                             print(f"         Wheels - Pos: {wheel_pos}, Vel: {wheel_vel}", flush=True)
                         if servo_ids is not None:
-                            servo_pos = pos[servo_ids.cpu().numpy()]
-                            servo_vel = vel[servo_ids.cpu().numpy()]
+                            # Safely convert to numpy array
+                            if hasattr(servo_ids, 'cpu'):
+                                servo_ids_np = servo_ids.cpu().numpy()
+                            elif hasattr(servo_ids, 'numpy'):
+                                servo_ids_np = servo_ids.numpy()
+                            else:
+                                servo_ids_np = np.array(servo_ids)
+                            servo_pos = pos[servo_ids_np]
+                            servo_vel = vel[servo_ids_np]
                             print(f"         Servos - Pos: {servo_pos}, Vel: {servo_vel}", flush=True)
                         if propeller_ids is not None:
-                            prop_pos = pos[propeller_ids.cpu().numpy()]
-                            prop_vel = vel[propeller_ids.cpu().numpy()]
+                            # Safely convert to numpy array
+                            if hasattr(propeller_ids, 'cpu'):
+                                prop_ids_np = propeller_ids.cpu().numpy()
+                            elif hasattr(propeller_ids, 'numpy'):
+                                prop_ids_np = propeller_ids.numpy()
+                            else:
+                                prop_ids_np = np.array(propeller_ids)
+                            prop_pos = pos[prop_ids_np]
+                            prop_vel = vel[prop_ids_np]
                             print(f"         Props - Pos: {prop_pos}, Vel: {prop_vel}", flush=True)
                         
                         # Also try to read from observation manager directly
@@ -774,8 +842,15 @@ def main() -> None:
                 
                 # Analyze each joint type
                 if wheel_ids is not None:
-                    wheel_pos_data = pos_array[:, wheel_ids.cpu().numpy()]
-                    wheel_vel_data = vel_array[:, wheel_ids.cpu().numpy()]
+                    # Safely convert to numpy array (handle both tensor and list)
+                    if hasattr(wheel_ids, 'cpu'):
+                        wheel_ids_np = wheel_ids.cpu().numpy()
+                    elif hasattr(wheel_ids, 'numpy'):
+                        wheel_ids_np = wheel_ids.numpy()
+                    else:
+                        wheel_ids_np = np.array(wheel_ids)
+                    wheel_pos_data = pos_array[:, wheel_ids_np]
+                    wheel_vel_data = vel_array[:, wheel_ids_np]
                     
                     wheel_pos_range = np.ptp(wheel_pos_data, axis=0)  # Peak-to-peak range
                     wheel_vel_max = np.max(np.abs(wheel_vel_data), axis=0)
@@ -790,8 +865,15 @@ def main() -> None:
                         print(f"         ⚠ Wheels not moving much - check velocity control", flush=True)
                 
                 if servo_ids is not None:
-                    servo_pos_data = pos_array[:, servo_ids.cpu().numpy()]
-                    servo_vel_data = vel_array[:, servo_ids.cpu().numpy()]
+                    # Safely convert to numpy array
+                    if hasattr(servo_ids, 'cpu'):
+                        servo_ids_np = servo_ids.cpu().numpy()
+                    elif hasattr(servo_ids, 'numpy'):
+                        servo_ids_np = servo_ids.numpy()
+                    else:
+                        servo_ids_np = np.array(servo_ids)
+                    servo_pos_data = pos_array[:, servo_ids_np]
+                    servo_vel_data = vel_array[:, servo_ids_np]
                     
                     servo_pos_range = np.ptp(servo_pos_data, axis=0)
                     servo_vel_max = np.max(np.abs(servo_vel_data), axis=0)
@@ -806,8 +888,15 @@ def main() -> None:
                         print(f"         ⚠ Servos not moving much - check position control", flush=True)
                 
                 if propeller_ids is not None:
-                    prop_pos_data = pos_array[:, propeller_ids.cpu().numpy()]
-                    prop_vel_data = vel_array[:, propeller_ids.cpu().numpy()]
+                    # Safely convert to numpy array
+                    if hasattr(propeller_ids, 'cpu'):
+                        prop_ids_np = propeller_ids.cpu().numpy()
+                    elif hasattr(propeller_ids, 'numpy'):
+                        prop_ids_np = propeller_ids.numpy()
+                    else:
+                        prop_ids_np = np.array(propeller_ids)
+                    prop_pos_data = pos_array[:, prop_ids_np]
+                    prop_vel_data = vel_array[:, prop_ids_np]
                     
                     prop_pos_range = np.ptp(prop_pos_data, axis=0)
                     prop_vel_max = np.max(np.abs(prop_vel_data), axis=0)
