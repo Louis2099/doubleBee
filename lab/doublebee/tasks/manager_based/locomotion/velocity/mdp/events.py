@@ -437,6 +437,105 @@ def reset_root_state_with_random_orientation(
     asset.write_root_com_velocity_to_sim(velocities, env_ids=env_ids)
 
 
+def apply_wheel_physx_material(
+    env: "ManagerBasedEnv",
+    env_ids: torch.Tensor | None,
+    robot_prim_path_template: str = "/World/envs/env_{}/Doublebee",
+    static_friction: float = 1.2,
+    dynamic_friction: float = 0.9,
+    restitution: float = 0.0,
+    friction_combine_mode: str = "multiply",
+    restitution_combine_mode: str = "multiply",
+):
+    """Apply a PhysX material to wheel collision prims at startup.
+
+    The USD robot may have wheel colliders bound to rendering materials instead of
+    PhysX materials; this event creates a single PhysX material and binds it to
+    the wheel collision meshes (Body1/Body2 under MeshInstance_* in rightWheel
+    and leftWheel) for each environment so that wheel-ground friction is correct.
+
+    Call this as a startup event (mode="startup") so it runs once after the scene
+    is built. All parameters except :attr:`env` and :attr:`env_ids` can be passed
+    via the EventTermCfg params dict.
+
+    Args:
+        env: The manager-based environment.
+        env_ids: Environment indices to update; if None, all envs are updated
+            (typical for startup).
+        robot_prim_path_template: Format string for the robot root prim path per
+            env, with one "{}" for the env index (e.g. "/World/envs/env_{}/Doublebee").
+        static_friction: Static friction coefficient for the wheel material.
+        dynamic_friction: Dynamic friction coefficient for the wheel material.
+        restitution: Restitution (bounciness) for the wheel material.
+        friction_combine_mode: How to combine with other body's friction
+            ("average", "min", "multiply", "max").
+        restitution_combine_mode: How to combine restitution ("average", "min",
+            "multiply", "max").
+    """
+    try:
+        import omni.usd
+        from pxr import UsdPhysics, PhysxSchema  # type: ignore[import-untyped]
+    except ImportError as e:
+        carb.log_warn(
+            f"[apply_wheel_physx_material] Skipping wheel PhysX material: missing dependency ({e})."
+        )
+        return
+
+    num_envs = env.scene.num_envs
+    if env_ids is None:
+        env_indices = list(range(num_envs))
+    else:
+        if isinstance(env_ids, torch.Tensor):
+            env_indices = env_ids.cpu().tolist()
+        else:
+            env_indices = list(env_ids)
+
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        carb.log_warn("[apply_wheel_physx_material] No USD stage; skipping.")
+        return
+
+    # Single shared material for all wheel collisions
+    mat_prim_path = "/World/PhysicsMaterials/WheelMaterial"
+    mat = UsdPhysics.Material.Define(stage, mat_prim_path)
+    mat.CreateStaticFrictionAttr(static_friction)
+    mat.CreateDynamicFrictionAttr(dynamic_friction)
+    mat.CreateRestitutionAttr(restitution)
+    try:
+        physx_api = PhysxSchema.PhysxMaterialAPI.Apply(mat.GetPrim())
+        physx_api.CreateFrictionCombineModeAttr(friction_combine_mode)
+        physx_api.CreateRestitutionCombineModeAttr(restitution_combine_mode)
+    except Exception:
+        pass
+
+    # Wheel collision prim paths relative to robot root (from Doublebee USD structure)
+    wheel_collision_suffixes = [
+        "rightWheel/MeshInstance_242/Body1",
+        "rightWheel/MeshInstance_243/Body2",
+        "leftWheel/MeshInstance_244/Body1",
+        "leftWheel/MeshInstance_245/Body1",
+        "leftWheel/MeshInstance_246/Body2",
+    ]
+
+    bound_count = 0
+    for i in env_indices:
+        i = int(i)
+        robot_path = robot_prim_path_template.format(i)
+        for suffix in wheel_collision_suffixes:
+            prim_path = f"{robot_path}/{suffix}"
+            prim = stage.GetPrimAtPath(prim_path)
+            if prim.IsValid():
+                binding_api = UsdPhysics.MaterialBindingAPI.Apply(prim)
+                if binding_api:
+                    binding_api.Bind(mat)
+                    bound_count += 1
+
+    if bound_count > 0:
+        carb.log_info(
+            f"[apply_wheel_physx_material] Bound '{mat_prim_path}' to {bound_count} wheel collision prims."
+        )
+
+
 def reset_root_state_from_terrain(
     env: ManagerBasedEnv,
     env_ids: torch.Tensor,
@@ -482,7 +581,17 @@ def reset_root_state_from_terrain(
     # sample random valid poses
     ids = torch.randint(0, valid_positions.shape[2], size=(len(env_ids),), device=env.device)
     positions = valid_positions[terrain.terrain_levels[env_ids], terrain.terrain_types[env_ids], ids]
-    positions += asset.data.default_root_state[env_ids, :3]
+    # Transform from patch-relative coordinates to world coordinates using env_origins
+    # (env_origins are at the center of each terrain patch)
+    positions += env.scene.env_origins[env_ids]
+    
+    #NOTE: Add height offset to prevent robot submersion
+    # The terrain patches are at the terrain surface (Z ≈ 0), but the robot's root link
+    # is at the bottom of the robot. We need to raise it so the robot body sits on the surface.
+    # Offset accounts for: wheel radius + body clearance + safety margin
+    # Center of mass is at 0.1m above root link, so 0.1m offset should position robot correctly
+    robot_height_offset = 0.30  # 10cm - adjust if needed based on actual robot dimensions
+    positions[:, 2] += robot_height_offset
 
     # sample random orientations
     range_list = [pose_range.get(key, (0.0, 0.0)) for key in ["roll", "pitch", "yaw"]]
@@ -492,16 +601,185 @@ def reset_root_state_from_terrain(
     # convert to quaternions
     orientations = math_utils.quat_from_euler_xyz(rand_samples[:, 0], rand_samples[:, 1], rand_samples[:, 2])
 
-    # sample random velocities
-    range_list = [velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
-    ranges = torch.tensor(range_list, device=asset.device)
-    rand_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=asset.device)
-
-    velocities = asset.data.default_root_state[:, 7:13] + rand_samples
+    # Set initial velocities to zero (no random sampling)
+    velocities = torch.zeros((len(env_ids), 6), device=asset.device, dtype=asset.data.default_root_state.dtype)
 
     # set into the physics simulation
     asset.write_root_link_pose_to_sim(torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
     asset.write_root_com_velocity_to_sim(velocities, env_ids=env_ids)
+
+
+def reset_root_state_from_terrain_aligned(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    pose_range: dict[str, tuple[float, float]],
+    velocity_range: dict[str, tuple[float, float]],
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    align_axis: str = "x",
+):
+    """Reset the asset root state with aligned start/end positions for play mode.
+    
+    This function samples a start position from "init_pos" patches and a target position from "target" patches,
+    ensuring they are aligned on the same X or Y axis. The robot is then oriented to face directly toward the target.
+    
+    This is designed for inference/play mode to provide consistent, aligned initialization for better visualization
+    and evaluation.
+
+    Args:
+        env: The environment instance.
+        env_ids: Environment indices to reset.
+        pose_range: Dictionary of pose ranges (only roll/pitch are used, yaw is computed from target direction).
+        velocity_range: Dictionary of velocity ranges (not used, velocities set to zero).
+        asset_cfg: Configuration for the asset to reset.
+        align_axis: Which axis to align on ("x" or "y"). Defaults to "x".
+            - "x": Start and end have same X coordinate (robot moves along Y axis)
+            - "y": Start and end have same Y coordinate (robot moves along X axis)
+    
+    Raises:
+        ValueError: If required terrain patches are not found.
+    """
+    # access the used quantities (to enable type-hinting)
+    asset: RigidObject | Articulation = env.scene[asset_cfg.name]
+    terrain: TerrainImporter = env.scene.terrain
+
+    # obtain all flat patches corresponding to the valid poses
+    valid_positions: torch.Tensor = terrain.flat_patches.get("init_pos")
+    if valid_positions is None:
+        raise ValueError(
+            "The event term 'reset_root_state_from_terrain_aligned' requires valid flat patches under 'init_pos'."
+            f" Found: {list(terrain.flat_patches.keys())}"
+        )
+    
+    # obtain target patches
+    target_positions: torch.Tensor = terrain.flat_patches.get("target")
+    if target_positions is None:
+        raise ValueError(
+            "The event term 'reset_root_state_from_terrain_aligned' requires valid flat patches under 'target'."
+            f" Found: {list(terrain.flat_patches.keys())}"
+        )
+
+    # Get terrain info for each environment
+    terrain_levels = terrain.terrain_levels[env_ids]  # [len(env_ids)]
+    terrain_types = terrain.terrain_types[env_ids]    # [len(env_ids)]
+    env_origins = env.scene.env_origins[env_ids]      # [len(env_ids), 3]
+    
+    # Initialize position and orientation arrays
+    positions = torch.zeros(len(env_ids), 3, device=env.device)
+    orientations = torch.zeros(len(env_ids), 4, device=env.device)
+    
+    # Process each environment individually to ensure alignment
+    for i, env_idx in enumerate(env_ids):
+        level = terrain_levels[i].item()
+        ttype = terrain_types[i].item()
+        env_origin = env_origins[i, :]  # [3]
+        
+        # Get available patches for this environment's terrain type
+        init_patches = valid_positions[level, ttype, :, :]  # [num_init_patches, 3]
+        target_patches = target_positions[level, ttype, :, :]  # [num_target_patches, 3]
+        
+        num_init = init_patches.shape[0]
+        num_target = target_patches.shape[0]
+        
+        if num_init == 0 or num_target == 0:
+            # Fallback: use random position if no patches available
+            if num_init > 0:
+                patch_idx = int(torch.randint(0, num_init, (1,), device=env.device).item())
+                positions[i, :] = init_patches[patch_idx, :] + env_origin
+            else:
+                positions[i, :] = env_origin
+            # Default orientation (no rotation)
+            orientations[i, :] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device)
+            continue
+        
+        # Sample a random start position
+        init_idx = int(torch.randint(0, num_init, (1,), device=env.device).item())
+        start_pos_relative = init_patches[init_idx, :]  # [3]
+        start_pos_world = start_pos_relative + env_origin  # [3]
+        
+        # Find target patches that align with start position on the specified axis
+        if align_axis == "x":
+            # Align on X axis: find targets with same X coordinate (within tolerance)
+            start_x = start_pos_world[0].item()
+            target_x_coords = target_patches[:, 0] + env_origin[0]  # [num_target_patches]
+            # Find targets within 0.5m of start X coordinate
+            aligned_mask = torch.abs(target_x_coords - start_x) < 0.5
+            aligned_targets = target_patches[aligned_mask, :]
+        else:  # align_axis == "y"
+            # Align on Y axis: find targets with same Y coordinate (within tolerance)
+            start_y = start_pos_world[1].item()
+            target_y_coords = target_patches[:, 1] + env_origin[1]  # [num_target_patches]
+            # Find targets within 0.5m of start Y coordinate
+            aligned_mask = torch.abs(target_y_coords - start_y) < 0.5
+            aligned_targets = target_patches[aligned_mask, :]
+        
+        # If no aligned targets found, use all targets (fallback)
+        if aligned_targets.shape[0] == 0:
+            aligned_targets = target_patches
+        
+        # Sample a random aligned target
+        target_idx = int(torch.randint(0, aligned_targets.shape[0], (1,), device=env.device).item())
+        target_pos_relative = aligned_targets[target_idx, :]  # [3]
+        target_pos_world = target_pos_relative + env_origin  # [3]
+        
+        # Force exact alignment on the specified axis
+        if align_axis == "x":
+            target_pos_world[0] = start_pos_world[0]
+        else:  # align_axis == "y"
+            target_pos_world[1] = start_pos_world[1]
+        
+        # Add height offset to target (for visualization)
+        target_pos_world[2] += 0.3
+        
+        # Store the aligned target position in the command manager if available
+        # This will be used by TerrainTargetDirectionCommand
+        # NOTE: This is set AFTER command manager resamples, so it will overwrite any random target
+        if hasattr(env, "command_manager") and hasattr(env.command_manager, "_terms"):
+            if "base_velocity" in env.command_manager._terms:
+                velocity_cmd = env.command_manager._terms["base_velocity"]
+                if hasattr(velocity_cmd, "current_targets_w"):
+                    # Set the aligned target (this happens after command manager resamples)
+                    velocity_cmd.current_targets_w[env_idx, :] = target_pos_world
+        
+        # Set robot position
+        robot_height_offset = 0.30
+        positions[i, :] = start_pos_world
+        positions[i, 2] += robot_height_offset
+        
+        # Compute orientation to face target
+        # Direction from start to target in world frame
+        direction_w = target_pos_world - positions[i, :]  # [3]
+        direction_xy = direction_w[:2]  # [2] - XY only
+        
+        # Compute yaw angle to face target
+        # NOTE: DoubleBee robot faces along +Y axis in body frame (not +X)
+        # atan2(x, y) gives angle from +Y axis to vector [x, y]
+        # This is the correct yaw angle for a robot that faces +Y
+        yaw = torch.atan2(direction_xy[0], direction_xy[1])  # Angle from +Y axis in XY plane
+        
+        # Sample roll and pitch from pose_range (if provided)
+        roll_range = pose_range.get("roll", (0.0, 0.0))
+        pitch_range = pose_range.get("pitch", (0.0, 0.0))
+        roll = math_utils.sample_uniform(
+            torch.tensor(roll_range[0], device=env.device),
+            torch.tensor(roll_range[1], device=env.device),
+            (1,), device=env.device
+        )[0]
+        pitch = math_utils.sample_uniform(
+            torch.tensor(pitch_range[0], device=env.device),
+            torch.tensor(pitch_range[1], device=env.device),
+            (1,), device=env.device
+        )[0]
+        
+        # Convert to quaternion
+        orientations[i, :] = math_utils.quat_from_euler_xyz(roll, pitch, yaw)
+    
+    # Set initial velocities to zero
+    velocities = torch.zeros((len(env_ids), 6), device=asset.device, dtype=asset.data.default_root_state.dtype)
+    
+    # Set into the physics simulation
+    asset.write_root_link_pose_to_sim(torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
+    asset.write_root_com_velocity_to_sim(velocities, env_ids=env_ids)
+
 
 
 def reset_joints_by_scale(

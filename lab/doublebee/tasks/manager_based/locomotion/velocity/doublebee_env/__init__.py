@@ -8,7 +8,7 @@
 import gymnasium as gym
 
 from . import agents
-from .flat_env.stand_drive.flat_env_stand_drive_cfg import DoubleBeeFlatStandDriveCfg
+from .flat_env.stand_drive.flat_env_stand_drive_cfg import DoubleBeeFlatStandDriveCfg, DoubleBeeFlatStandDriveCfg_PLAY
 from .velocity_env_cfg import DoubleBeeVelocityEnvCfg
 
 ##
@@ -29,10 +29,10 @@ gym.register(
 
 gym.register(
     id="Isaac-Velocity-Flat-DoubleBee-Play-v1-ppo",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": DoubleBeeFlatStandDriveCfg,
+        "env_cfg_entry_point": DoubleBeeFlatStandDriveCfg_PLAY,
         "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
     },
 )

@@ -57,7 +57,7 @@ from isaaclab.envs import (
     DirectMARLEnv,
     multi_agent_to_single_agent,
 )
-from lab.flamingo.isaaclab.isaaclab.envs import ManagerBasedConstraintRLEnv
+from lab.doublebee.isaaclab.isaaclab.envs import ManagerBasedConstraintRLEnv
 
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_pickle, dump_yaml
@@ -152,9 +152,20 @@ def main():
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
         print(f"[DEBUG] After RecordVideo wrapper: {type(env)}, unwrapped: {type(env.unwrapped)}")
     
+    # set seed BEFORE wrapping (important for deterministic initialization)
+    print(f"[DEBUG] Setting seed: {agent_cfg.seed}")
+    # For unwrapped environment, call seed directly
+    if hasattr(env.unwrapped, 'seed'):
+        env.unwrapped.seed(agent_cfg.seed)
+    
     # wrap around environment for co-rl
     print(f"[DEBUG] Before CoRlVecEnvWrapper: env type={type(env)}, unwrapped type={type(env.unwrapped)}")
     env = CoRlVecEnvWrapper(env, agent_cfg)
+    
+    # Now reset the environment after seed is set
+    print("[INFO] Resetting environment after seed is set...")
+    env.reset()
+    
     # create runner from co-rl
     if is_off_policy:
         runner = OffPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
@@ -172,9 +183,6 @@ def main():
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         runner.load(resume_path)
-
-    # set seed of the environment
-    env.seed(agent_cfg.seed)
 
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
@@ -194,7 +202,7 @@ def main():
         print("[INFO] Agent configuration saved as YAML only.")
 
     # run training
-    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=False)
 
     # close the simulator
     env.close()

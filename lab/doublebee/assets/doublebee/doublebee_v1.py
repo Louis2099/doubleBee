@@ -38,7 +38,7 @@ DOUBLEBEE_CFG = ArticulationCfg(
     ),
 
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.5),  # Initial height - adjust based on your robot
+        pos=(0.0, 0.0, 0.1),  # Initial height - adjust based on your robot
         joint_pos={
             # Wheel joints - these control ground movement (Z-axis rotation)
             "leftWheel": 0.0,
@@ -62,14 +62,14 @@ DOUBLEBEE_CFG = ArticulationCfg(
             effort_limit=1.0,  # Adjust based on your motor specs
             velocity_limit=200.0,
             min_delay=0,
-            max_delay=4,
+            max_delay=0,
             stiffness={
                 "leftWheel": 0.0,   # Wheels typically have no stiffness
                 "rightWheel": 0.0,
             },
             damping={
-                "leftWheel": 1000,   # Some damping for wheel friction
-                "rightWheel": 1000,
+                "leftWheel": 10000,   # Some damping for wheel friction
+                "rightWheel": 10000,
             },
             friction={
                 "leftWheel": 0.0,
@@ -87,10 +87,10 @@ DOUBLEBEE_CFG = ArticulationCfg(
             effort_limit=5.0,  # Lower effort for servo motors
             velocity_limit=2.0,
             min_delay=0,
-            max_delay=4,
+            max_delay=0,
             stiffness={
-                "leftPropellerServo": 1000,  # High stiffness for precise control
-                "rightPropellerServo": 1000,
+                "leftPropellerServo": 50000,  # High stiffness for precise control
+                "rightPropellerServo": 50000,
             },
             damping={
                 "leftPropellerServo": 1000,
@@ -112,7 +112,7 @@ DOUBLEBEE_CFG = ArticulationCfg(
             effort_limit=100.0,  
             velocity_limit=600.0,  # Increased velocity limit
             min_delay=0,
-            max_delay=4,
+            max_delay=0,
             stiffness={
                 "leftPropeller": 0.0,  # No stiffness for velocity control
                 "rightPropeller": 0.0,

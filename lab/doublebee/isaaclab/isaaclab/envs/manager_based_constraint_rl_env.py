@@ -89,6 +89,10 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
         self.metadata["render_fps"] = 1 / self.step_dt
 
         print("[INFO]: Completed setting up the environment...")
+        print(f"[DEBUG Environment Init] max_episode_length = {self.max_episode_length} steps")
+        print(f"[DEBUG Environment Init] episode_length_s = {self.cfg.episode_length_s}s")
+        print(f"[DEBUG Environment Init] step_dt = {self.step_dt}s")
+        print(f"[DEBUG Environment Init] episode_length_buf initialized: {self.episode_length_buf.shape}")
 
     """
     Properties.
@@ -173,6 +177,13 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
             A tuple containing the observations, rewards, resets (terminated and truncated) and extras.
         """
         # process actions
+        # Duplicate left servo action to right servo (action[2] -> action[3])
+        # This makes both servos use the same policy output, but with opposite signs via scales
+        # Action space remains 6D, but action[3] is ignored and replaced with action[2]
+        action = action.clone()  # Clone to avoid modifying the original tensor
+        if action.shape[-1] >= 4:  # Ensure we have at least 4 actions (servos are at indices 2 and 3)
+            action[..., 3] = action[..., 2]  # Duplicate left servo action to right servo
+        
         # print(f"[INTERNAL CHECK] Action passed to the env.step(): {action}", flush=True)
         self.action_manager.process_action(action.to(self.device))
         # print(f"[INTERNAL CHECK] Action manager processed action: {self.action_manager.action}", flush=True)
@@ -204,9 +215,22 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
         self.episode_length_buf += 1  # step in current episode (per env)
         self.common_step_counter += 1  # total step (common for all envs)
         # -- check terminations
+        if not hasattr(self, '_debug_constraint_counter'):
+            self._debug_constraint_counter = 0
+        self._debug_constraint_counter += 1
+        
         self.reset_buf = self.constraint_manager.compute()
         self.reset_delta = self.constraint_manager.constrained
         self.reset_time_outs = self.constraint_manager.time_outs
+        
+        # Debug: Log constraint status periodically
+        if self._debug_constraint_counter % 500 == 0:
+            print(f"[DEBUG Constraints] Step {self._debug_constraint_counter}:")
+            print(f"  episode_length_buf[0] = {self.episode_length_buf[0]}")
+            print(f"  max_episode_length = {self.max_episode_length}")
+            print(f"  reset_buf[0] = {self.reset_buf[0]}")
+            print(f"  reset_time_outs[0] = {self.reset_time_outs[0]}")
+            print(f"  reset_delta[0] = {self.reset_delta[0]}")
         # -- reward computation
         self.reward_buf = self.reward_manager.compute(dt=self.step_dt)
 
@@ -218,6 +242,16 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
         # -- reset envs that constrained/timed-out and log the episode information
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(reset_env_ids) > 0:
+            # Debug: Log why episodes are resetting
+            if not hasattr(self, '_debug_reset_counter'):
+                self._debug_reset_counter = 0
+            self._debug_reset_counter += 1
+            if self._debug_reset_counter % 10 == 0:  # Log every 10th reset
+                print(f"[DEBUG _reset_idx] Resetting {len(reset_env_ids)} envs: {reset_env_ids.tolist()}")
+                print(f"  episode_length_buf: {self.episode_length_buf[reset_env_ids].tolist()}")
+                print(f"  max_episode_length: {self.max_episode_length}")
+                print(f"  time_outs: {self.reset_time_outs[reset_env_ids].tolist()}")
+                print(f"  delta (early termination): {self.reset_delta[reset_env_ids].tolist()}")
             # trigger recorder terms for pre-reset calls
             self.recorder_manager.record_pre_reset(reset_env_ids)
 

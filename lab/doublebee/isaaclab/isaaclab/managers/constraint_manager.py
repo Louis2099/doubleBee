@@ -48,6 +48,11 @@ class ConstraintManager(ManagerBase):
         super().__init__(cfg, env)  # _prepare_terms() called here
 
         self.env = env
+        
+        # Debug: Log registered constraints
+        print(f"[DEBUG ConstraintManager] Initialized with {len(self._term_names)} constraint terms:")
+        for name in self._term_names:
+            print(f"  - {name}")
 
         # hyperparameters
         self.tau = 0.95  # 지수 이동 평균 계수
@@ -162,6 +167,10 @@ class ConstraintManager(ManagerBase):
         Returns:
             A tensor of shape (num_envs,) with termination probabilities in [0, 1].
         """
+        if not hasattr(self, '_debug_compute_counter'):
+            self._debug_compute_counter = 0
+        self._debug_compute_counter += 1
+        
         self._truncated_buf.zero_()
         self._delta_buf.zero_()
 
@@ -171,6 +180,12 @@ class ConstraintManager(ManagerBase):
 
             if not isinstance(value, torch.Tensor):
                 value = torch.tensor(value, device=self.device, dtype=torch.float32)
+
+            # Debug: Log constraint values periodically
+            if self._debug_compute_counter % 500 == 0 and name == "time_out":
+                print(f"[DEBUG ConstraintManager.compute] Constraint '{name}':")
+                print(f"  value[0] = {value[0]}")
+                print(f"  time_out type = {term_cfg.time_out}")
 
             if term_cfg.time_out == "truncate":
                 value = torch.clamp(value, 0.0, 1.0)
@@ -217,6 +232,14 @@ class ConstraintManager(ManagerBase):
                 self._term_values[name][:] = value
 
         reset_buf = torch.max(self._truncated_buf, self._delta_buf)
+
+        # Debug: Log reset_buf calculation
+        if hasattr(self, '_debug_compute_counter') and self._debug_compute_counter % 500 == 0:
+            print(f"[DEBUG ConstraintManager.compute] reset_buf calculation:")
+            print(f"  _truncated_buf[0] = {self._truncated_buf[0]}")
+            print(f"  _delta_buf[0] = {self._delta_buf[0]}")
+            print(f"  reset_buf[0] = {reset_buf[0]}")
+            print(f"  (reset_buf == 1.0)[0] = {(reset_buf == 1.0)[0]}")
 
         return reset_buf == 1.0
 

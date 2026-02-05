@@ -52,6 +52,12 @@ def parse_arguments() -> argparse.Namespace:
         default=False,
         help="Run a hovering test: wheels stalled, servos at 0, propellers provide thrust to hover.",
     )
+    parser.add_argument(
+        "--visualize_rays",
+        action="store_true",
+        default=False,
+        help="Enable visualization of ray casting sensors (e.g., height scanner).",
+    )
     AppLauncher.add_app_launcher_args(parser)
     return parser.parse_args()
 
@@ -91,8 +97,10 @@ def create_test_action(env, step, test_phase, wheel_ids, servo_ids, propeller_id
         if action_dim >= 2:
             # Apply normalized velocity commands (-1 to 1)
             t = torch.tensor((step + 1) * 0.1, device=action.device)  # Start from 0.1, not 0.0
-            wheel_vel = 0.5 * torch.sin(t)  # ±0.5 normalized velocity command
+            # wheel_vel = 0.5 * torch.sin(t)  # ±0.5 normalized velocity command\
+            wheel_vel = 1.0
             action[:, :2] = wheel_vel  # First 2 actions for wheels
+            action[:, 2:4] =  -1.0 # Actions 2-3 for servos
             if step % 20 == 0:
                 print(f"[CREATE_ACTION] WHEELS phase - applied {wheel_vel} to actions[:, :2]", flush=True)
         else:
@@ -150,6 +158,21 @@ def main() -> None:
             num_envs=args_cli.num_envs,
             use_fabric=not args_cli.disable_fabric,
         )
+
+        # Enable ray casting sensor visualization if requested
+        if args_cli.visualize_rays:
+            if hasattr(env_cfg, 'scene') and hasattr(env_cfg.scene, 'height_scanner'):
+                env_cfg.scene.height_scanner.debug_vis = True
+                print("[INFO] Ray casting sensor visualization enabled for 'height_scanner'", flush=True)
+            
+            # Also check for other common ray casting sensor names
+            scene_attrs = dir(env_cfg.scene) if hasattr(env_cfg, 'scene') else []
+            ray_sensor_names = [attr for attr in scene_attrs if 'scanner' in attr.lower() or 'ray' in attr.lower()]
+            for sensor_name in ray_sensor_names:
+                sensor = getattr(env_cfg.scene, sensor_name, None)
+                if sensor is not None and hasattr(sensor, 'debug_vis'):
+                    sensor.debug_vis = True
+                    print(f"[INFO] Ray casting sensor visualization enabled for '{sensor_name}'", flush=True)
 
         env = gym.make(args_cli.task, cfg=env_cfg)
 
@@ -486,6 +509,7 @@ def main() -> None:
         joint_positions = []
         joint_velocities = []
         test_phase = "wheels"  # Start with wheels instead of idle
+        # test_phase = "servos"  # Start with wheels instead of idle
         
         print(f"\n{'='*80}", flush=True)
         print(f"STARTING SIMULATION LOOP", flush=True)
@@ -815,11 +839,12 @@ def main() -> None:
                         print(f"[JOINT] Error recording data: {e}", flush=True)
             
             # Change test phase every 20 steps for faster testing
-            if test_joint_movement and step > 0 and step % 20 == 0:
-                phases = ["idle", "wheels", "servos", "propellers"]
-                current_idx = phases.index(test_phase)
-                test_phase = phases[(current_idx + 1) % len(phases)]
-                print(f"[JOINT] Switching to test phase: {test_phase}", flush=True)
+            # NOTE: disable phase switching for now
+            # if test_joint_movement and step > 0 and step % 20 == 0:
+            #     phases = ["idle", "wheels", "servos", "propellers"]
+            #     current_idx = phases.index(test_phase)
+            #     test_phase = phases[(current_idx + 1) % len(phases)]
+            #     print(f"[JOINT] Switching to test phase: {test_phase}", flush=True)
             term = bool(getattr(terminated, "any", lambda: terminated)())
             trunc = bool(getattr(truncated, "any", lambda: truncated)())
             if term or trunc:
@@ -947,6 +972,7 @@ def hover_test(env, num_steps: int) -> None:
     - Ramp total thrust from 1.05x to 1.00x over a short warmup, then hold.
     """
     import math
+    import numpy as np
     import torch
 
     device = env.device if hasattr(env, "device") else torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -959,7 +985,8 @@ def hover_test(env, num_steps: int) -> None:
     # Scales must match ActionsCfg
     wheel_scale = 20.0
     servo_scale = 2.0
-    prop_scale = 600.0
+    # prop_scale = 490.0
+    prop_scale = 300.0
 
     # Aerodynamics thrust coefficient (must match DoubleBeeEventsCfg)
     thrust_coefficient = 1e-4  # N / (rad/s)^2
@@ -1049,7 +1076,7 @@ def hover_test(env, num_steps: int) -> None:
         if (prop_slice.stop - prop_slice.start) >= 2:
             prop_cmd = torch.empty((num_envs, 2), device=action.device, dtype=action.dtype)
             prop_cmd[:, 0] = prop_action_value   # left propeller: +
-            prop_cmd[:, 1] = -prop_action_value  # right propeller: -
+            prop_cmd[:, 1] = prop_action_value  # right propeller: -
             action[:, prop_slice] = prop_cmd
         else:
             # Fallback: if only one prop dimension exists, just use positive
@@ -1067,26 +1094,152 @@ def hover_test(env, num_steps: int) -> None:
                         act_tensor = act_tensor.squeeze(0)
         except Exception:
             pass
-        if step % 10 == 0:
-            print(f"[HOVER] About to step: act_tensor.shape={tuple(act_tensor.shape)} device={act_tensor.device}", flush=True)
+        
+        # CRITICAL DEBUG: Verify servo actions are actually zero before env.step()
+        if step % 50 == 0:
+            print(f"\n[HOVER] ===== ACTION VERIFICATION BEFORE env.step() =====", flush=True)
+            print(f"[HOVER] act_tensor.shape={tuple(act_tensor.shape)} device={act_tensor.device}", flush=True)
+            print(f"[HOVER] Full action tensor [env 0]: {act_tensor[0].cpu().numpy()}", flush=True)
+            
+            # Check servo slice specifically
+            if servo_slice.stop > servo_slice.start:
+                servo_actions = act_tensor[0, servo_slice].cpu().numpy()
+                print(f"[HOVER] Servo actions (indices {servo_slice}): {servo_actions}", flush=True)
+                print(f"[HOVER] Servo actions are zero: {np.allclose(servo_actions, 0.0)}", flush=True)
+                if not np.allclose(servo_actions, 0.0):
+                    print(f"[HOVER] ⚠️  ERROR: Servo actions are NOT zero! Max abs value: {np.abs(servo_actions).max()}", flush=True)
+            else:
+                print(f"[HOVER] Servo slice is empty: {servo_slice}", flush=True)
+            
+            # Check wheel and prop actions too for context
+            if wheel_slice.stop > wheel_slice.start:
+                wheel_actions = act_tensor[0, wheel_slice].cpu().numpy()
+                print(f"[HOVER] Wheel actions (indices {wheel_slice}): {wheel_actions}", flush=True)
+            if prop_slice.stop > prop_slice.start:
+                prop_actions = act_tensor[0, prop_slice].cpu().numpy()
+                print(f"[HOVER] Propeller actions (indices {prop_slice}): {prop_actions}", flush=True)
+            
             try:
                 if hasattr(env.unwrapped, 'action_manager'):
-                    print(f"[HOVER] action_manager buffer shape: {tuple(env.unwrapped.action_manager.action.shape)}", flush=True)
+                    print(f"[HOVER] Action manager buffer BEFORE step: {env.unwrapped.action_manager.action[0].cpu().numpy()}", flush=True)
             except Exception:
                 pass
+            print(f"[HOVER] ================================================\n", flush=True)
+        
         obs, reward, terminated, truncated, info = env.step(act_tensor)
+        
+        # CRITICAL DEBUG: Check what action manager received and what joint targets were set
+        if step % 50 == 0:
+            print(f"\n[HOVER] ===== ACTION VERIFICATION AFTER env.step() =====", flush=True)
+            try:
+                if hasattr(env.unwrapped, 'action_manager'):
+                    action_mgr = env.unwrapped.action_manager
+                    print(f"[HOVER] Action manager buffer AFTER step: {action_mgr.action[0].cpu().numpy()}", flush=True)
+                    
+                    # Check each action term to see what joint targets were set
+                    active_terms = action_mgr.active_terms
+                    if isinstance(active_terms, dict):
+                        terms_iter = active_terms.items()
+                    elif isinstance(active_terms, list):
+                        terms_iter = enumerate(active_terms)
+                    else:
+                        terms_iter = []
+                    
+                    for term_identifier, term in terms_iter:
+                        if isinstance(term_identifier, int):
+                            term_name = f"term_{term_identifier}"
+                        else:
+                            term_name = term_identifier
+                        
+                        # Check if this is a servo term
+                        if 'servo' in term_name.lower():
+                            print(f"[HOVER] Servo term '{term_name}':", flush=True)
+                            
+                            # Check raw actions received by this term
+                            if hasattr(term, 'raw_actions'):
+                                raw = term.raw_actions[0].cpu().numpy()
+                                print(f"         Raw actions: {raw}", flush=True)
+                                print(f"         Raw actions are zero: {np.allclose(raw, 0.0)}", flush=True)
+                            
+                            # Check processed actions (after scaling)
+                            if hasattr(term, 'action'):
+                                processed = term.action[0].cpu().numpy()
+                                print(f"         Processed actions: {processed}", flush=True)
+                                print(f"         Processed actions are zero: {np.allclose(processed, 0.0)}", flush=True)
+                            
+                            # Check joint position targets (this is what actually gets sent to the robot)
+                            if hasattr(term, 'joint_pos_target') and term.joint_pos_target is not None:
+                                joint_target = term.joint_pos_target[0].cpu().numpy()
+                                joint_target_deg = joint_target * 180.0 / math.pi
+                                print(f"         Joint position targets (rad): {joint_target}", flush=True)
+                                print(f"         Joint position targets (deg): {joint_target_deg}", flush=True)
+                                print(f"         Joint targets are zero: {np.allclose(joint_target, 0.0)}", flush=True)
+                                if not np.allclose(joint_target, 0.0):
+                                    print(f"         ⚠️  ERROR: Joint targets are NOT zero despite zero actions!", flush=True)
+                            
+                            # Check joint names to confirm these are servos
+                            if hasattr(term, '_joint_names'):
+                                print(f"         Joint names: {term._joint_names}", flush=True)
+            except Exception as e:
+                print(f"[HOVER] Error checking action manager: {e}", flush=True)
+            print(f"[HOVER] ================================================\n", flush=True)
 
         if step % 50 == 0:
             # Basic telemetry
             try:
                 root_pos = robot.data.root_pos_w[0]
                 root_vel = robot.data.root_lin_vel_w[0]
-                print(
-                    f"[HOVER] step={step:5d} thrust_factor={thrust_factor:.3f} per_prop_N={per_prop_thrust:.2f} omega={omega:.1f} rad/s | z={root_pos[2]:.3f} vz={root_vel[2]:.3f}",
-                    flush=True,
-                )
-            except Exception:
-                pass
+                
+                # Monitor servo positions to diagnose unexpected rotation
+                servo_joint_names = ["leftPropellerServo", "rightPropellerServo"]
+                servo_indices = [robot.joint_names.index(name) for name in servo_joint_names if name in robot.joint_names]
+                if servo_indices:
+                    servo_pos = robot.data.joint_pos[0, servo_indices].cpu().numpy()
+                    servo_vel = robot.data.joint_vel[0, servo_indices].cpu().numpy()
+                    servo_pos_deg = servo_pos * 180.0 / math.pi
+                    servo_vel_deg = servo_vel * 180.0 / math.pi
+                    
+                    # Check action manager to see what target positions are set
+                    servo_action_target = None
+                    if hasattr(env.unwrapped, 'action_manager'):
+                        try:
+                            active_terms = env.unwrapped.action_manager.active_terms
+                            if isinstance(active_terms, dict):
+                                # Find servo action terms
+                                for term_name, term in active_terms.items():
+                                    if 'servo' in term_name.lower() and hasattr(term, 'joint_pos_target'):
+                                        if servo_action_target is None:
+                                            servo_action_target = term.joint_pos_target[0, :].cpu().numpy()
+                                        break
+                        except Exception:
+                            pass
+                    
+                    print(
+                        f"[HOVER] step={step:5d} thrust_factor={thrust_factor:.3f} per_prop_N={per_prop_thrust:.2f} omega={omega:.1f} rad/s | z={root_pos[2]:.3f} vz={root_vel[2]:.3f}",
+                        flush=True,
+                    )
+                    print(
+                        f"[HOVER] Servo positions: {servo_pos_deg} deg | Servo velocities: {servo_vel_deg} deg/s",
+                        flush=True,
+                    )
+                    if servo_action_target is not None:
+                        servo_target_deg = servo_action_target * 180.0 / math.pi
+                        print(
+                            f"[HOVER] Servo action targets: {servo_target_deg} deg (should be ~0.0)",
+                            flush=True,
+                        )
+                    if abs(servo_pos[0]) > 0.01 or abs(servo_pos[1]) > 0.01:
+                        print(
+                            f"[HOVER] ⚠️  WARNING: Servos are rotating despite zero actions! This suggests external forces (propeller thrust) are creating torques on servo joints.",
+                            flush=True,
+                        )
+                else:
+                    print(
+                        f"[HOVER] step={step:5d} thrust_factor={thrust_factor:.3f} per_prop_N={per_prop_thrust:.2f} omega={omega:.1f} rad/s | z={root_pos[2]:.3f} vz={root_vel[2]:.3f}",
+                        flush=True,
+                    )
+            except Exception as e:
+                print(f"[HOVER] Telemetry error: {e}", flush=True)
 
         term = bool(getattr(terminated, "any", lambda: terminated)())
         trunc = bool(getattr(truncated, "any", lambda: truncated)())
