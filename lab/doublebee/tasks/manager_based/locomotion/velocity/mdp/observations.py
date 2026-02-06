@@ -379,3 +379,20 @@ class ObservationsCfg:
 
     # Value observations - Used by critic network (same as policy for now)
     value: PolicyCfg = PolicyCfg()
+
+
+@configclass
+class ObservationsCfgNoHeightScan(ObservationsCfg):
+    """Observation config without height scan (e.g. for inverted-pendulum / flat same-level tasks).
+
+    Use when the scene has no height_scanner or when elevation perception is not desired.
+    """
+
+    @configclass
+    class PolicyCfgNoHeightScan(ObservationsCfg.PolicyCfg):
+        """Policy observations without height_scan term."""
+
+        height_scan = None  # Disable elevation map
+
+    policy: PolicyCfgNoHeightScan = PolicyCfgNoHeightScan()
+    value: PolicyCfgNoHeightScan = PolicyCfgNoHeightScan()

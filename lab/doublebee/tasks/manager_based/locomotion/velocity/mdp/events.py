@@ -474,7 +474,7 @@ def apply_wheel_physx_material(
     """
     try:
         import omni.usd
-        from pxr import UsdPhysics, PhysxSchema  # type: ignore[import-untyped]
+        from pxr import UsdPhysics, UsdShade, PhysxSchema  # type: ignore[import-untyped]
     except ImportError as e:
         carb.log_warn(
             f"[apply_wheel_physx_material] Skipping wheel PhysX material: missing dependency ({e})."
@@ -495,16 +495,22 @@ def apply_wheel_physx_material(
         carb.log_warn("[apply_wheel_physx_material] No USD stage; skipping.")
         return
 
-    # Single shared material for all wheel collisions
+    # Create a prim for the physics material (USD has no UsdPhysics.Material; use prim + MaterialAPI)
     mat_prim_path = "/World/PhysicsMaterials/WheelMaterial"
-    mat = UsdPhysics.Material.Define(stage, mat_prim_path)
-    mat.CreateStaticFrictionAttr(static_friction)
-    mat.CreateDynamicFrictionAttr(dynamic_friction)
-    mat.CreateRestitutionAttr(restitution)
+    material_prim = stage.DefinePrim(mat_prim_path, "Material")
+    if not material_prim:
+        carb.log_warn("[apply_wheel_physx_material] Failed to define material prim; skipping.")
+        return
+
+    # Apply UsdPhysics.MaterialAPI and set friction/restitution (API exists in pxr.UsdPhysics)
+    mat_api = UsdPhysics.MaterialAPI.Apply(material_prim)
+    mat_api.CreateStaticFrictionAttr().Set(static_friction)
+    mat_api.CreateDynamicFrictionAttr().Set(dynamic_friction)
+    mat_api.CreateRestitutionAttr().Set(restitution)
     try:
-        physx_api = PhysxSchema.PhysxMaterialAPI.Apply(mat.GetPrim())
-        physx_api.CreateFrictionCombineModeAttr(friction_combine_mode)
-        physx_api.CreateRestitutionCombineModeAttr(restitution_combine_mode)
+        physx_api = PhysxSchema.PhysxMaterialAPI.Apply(material_prim)
+        physx_api.CreateFrictionCombineModeAttr().Set(friction_combine_mode)
+        physx_api.CreateRestitutionCombineModeAttr().Set(restitution_combine_mode)
     except Exception:
         pass
 
@@ -512,10 +518,12 @@ def apply_wheel_physx_material(
     wheel_collision_suffixes = [
         "rightWheel/MeshInstance_242/Body1",
         "rightWheel/MeshInstance_243/Body2",
-        "leftWheel/MeshInstance_244/Body1",
         "leftWheel/MeshInstance_245/Body1",
         "leftWheel/MeshInstance_246/Body2",
     ]
+
+    # Wrap the material prim as a UsdShade.Material for binding
+    material = UsdShade.Material(material_prim)
 
     bound_count = 0
     for i in env_indices:
@@ -525,9 +533,11 @@ def apply_wheel_physx_material(
             prim_path = f"{robot_path}/{suffix}"
             prim = stage.GetPrimAtPath(prim_path)
             if prim.IsValid():
-                binding_api = UsdPhysics.MaterialBindingAPI.Apply(prim)
+                # Use UsdShade.MaterialBindingAPI (not UsdPhysics) for binding materials
+                binding_api = UsdShade.MaterialBindingAPI.Apply(prim)
                 if binding_api:
-                    binding_api.Bind(mat)
+                    # Bind the material to this collision prim
+                    binding_api.Bind(material)
                     bound_count += 1
 
     if bound_count > 0:

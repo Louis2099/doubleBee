@@ -462,3 +462,15 @@ class RewardsCfg:
     #     weight=0.001,
     # )
     # """Penalize large action magnitudes to encourage smooth, energy-efficient control."""
+
+
+@configclass
+class RewardsCfgInvertedPendulum(RewardsCfg):
+    """Reward config for inverted-pendulum (wheels-only, same-level target).
+
+    Deprecates propeller-related shaping rewards; terminal and task rewards unchanged.
+    - propeller_efficiency: removed (no propeller actuation).
+    - terminal_propeller_collision: kept (still penalize if propellers touch obstacles).
+    """
+
+    propeller_efficiency = None

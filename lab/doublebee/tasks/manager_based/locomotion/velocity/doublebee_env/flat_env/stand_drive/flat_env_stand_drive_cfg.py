@@ -48,18 +48,18 @@ class DoubleBeeEventsCfg:
     """Event configuration for DoubleBee stand and drive task."""
 
     # One-time at spawn: assign PhysX material to wheel colliders so friction is correct
-    apply_wheel_friction = EventTerm(
-        func=mdp.apply_wheel_physx_material,
-        mode="startup",
-        params={
-            "robot_prim_path_template": "/World/envs/env_{}/Doublebee",
-            "static_friction": 1.2,
-            "dynamic_friction": 0.9,
-            "restitution": 0.0,
-            "friction_combine_mode": "multiply",
-            "restitution_combine_mode": "multiply",
-        },
-    )
+    # apply_wheel_friction = EventTerm(
+    #     func=mdp.apply_wheel_physx_material,
+    #     mode="startup",
+    #     params={
+    #         "robot_prim_path_template": "/World/envs/env_{}/Doublebee",
+    #         "static_friction": 1.2,
+    #         "dynamic_friction": 0.9,
+    #         "restitution": 0.0,
+    #         "friction_combine_mode": "multiply",
+    #         "restitution_combine_mode": "multiply",
+    #     },
+    # )
 
     # Apply propeller aerodynamics every physics step
     propeller_aerodynamics = EventTerm(
@@ -110,18 +110,18 @@ class DoubleBeeEventsCfg_PLAY:
     """Event configuration for DoubleBee stand and drive task in play mode with aligned initialization."""
 
     # Same startup event as training so wheel PhysX material is applied
-    apply_wheel_friction = EventTerm(
-        func=mdp.apply_wheel_physx_material,
-        mode="startup",
-        params={
-            "robot_prim_path_template": "/World/envs/env_{}/Doublebee",
-            "static_friction": 1.2,
-            "dynamic_friction": 0.9,
-            "restitution": 0.0,
-            "friction_combine_mode": "multiply",
-            "restitution_combine_mode": "multiply",
-        },
-    )
+    # apply_wheel_friction = EventTerm(
+    #     func=mdp.apply_wheel_physx_material,
+    #     mode="startup",
+    #     params={
+    #         "robot_prim_path_template": "/World/envs/env_{}/Doublebee",
+    #         "static_friction": 1.2,
+    #         "dynamic_friction": 0.9,
+    #         "restitution": 0.0,
+    #         "friction_combine_mode": "multiply",
+    #         "restitution_combine_mode": "multiply",
+    #     },
+    # )
 
     # Apply propeller aerodynamics every physics step
     propeller_aerodynamics = EventTerm(

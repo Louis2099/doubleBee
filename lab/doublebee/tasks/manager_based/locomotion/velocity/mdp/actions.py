@@ -72,3 +72,28 @@ class ActionsCfg:
         use_default_offset=False,
         preserve_order=True,
     )
+
+
+@configclass
+class ActionsCfgWheelsServosOnly(ActionsCfg):
+    """Action config with only wheels and propeller servos (no propeller velocity).
+
+    Use for tasks where propellers are not used for thrust but servo tilt is still controlled.
+    """
+
+    propeller_vel_left = None
+    propeller_vel_right = None
+
+
+@configclass
+class ActionsCfgWheelsOnly(ActionsCfg):
+    """Action config with only wheel velocity (no servos, no propeller velocity).
+
+    Use for inverted-pendulum or balance tasks where only ground locomotion is actuated;
+    servos and propellers are fixed (e.g. servos at 0, propellers off).
+    """
+
+    propeller_servo_pos_left = None
+    propeller_servo_pos_right = None
+    propeller_vel_left = None
+    propeller_vel_right = None
