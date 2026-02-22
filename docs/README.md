@@ -1,62 +1,141 @@
-# Isaac LAB for Flamingo
+# Isaac Lab for DoubleBee
 
-[![IsaacSim](https://img.shields.io/badge/IsaacSim-4.0-silver.svg)](https://docs.omniverse.nvidia.com/isaacsim/latest/overview.html)
-[![Orbit](https://img.shields.io/badge/Lab-0.3.0-silver)](https://isaac-orbit.github.io/orbit/)
+[![IsaacSim](https://img.shields.io/badge/IsaacSim-4.5-silver.svg)](https://docs.omniverse.nvidia.com/isaacsim/latest/overview.html)
+[![IsaacLab](https://img.shields.io/badge/Lab-2.0.0-silver)](https://isaac-orbit.github.io/orbit/)
 [![Python](https://img.shields.io/badge/python-3.10-blue.svg)](https://docs.python.org/3/whatsnew/3.10.html)
 [![Linux platform](https://img.shields.io/badge/platform-linux--64-orange.svg)](https://releases.ubuntu.com/20.04/)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://pre-commit.com/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](https://opensource.org/license/mit)
 
-## Isaac Lab Flamingo
+## **✨ Features**
+✔️ **DoubleBee Robot**: Two-wheel legged robot with inverted pendulum control  
+✔️ **Velocity Tracking**: Advanced velocity control for locomotion tasks  
+✔️ **Inverted Pendulum Mode**: Specialized control for self-balancing locomotion  
+✔️ **Stack Environment**: Observations can be stacked with arguments  
+✔️ **Constraint Manager**: [Constraints as Termination (CaT)](https://arxiv.org/abs/2403.18765) method implementation  
+✔️ **CoRL**: Based on [rsl_rl](https://github.com/leggedrobotics/rsl_rl) library, off-policy algorithms implemented via `off_policy_runner`  
 
-https://github.com/jaykorea/Isaac-RL-Two-wheel-Legged-Bot/assets/95605860/75075512-d2c6-4373-a932-c299567022e6
+## Isaac Lab DoubleBee
 
-https://github.com/jaykorea/Isaac-RL-Two-wheel-Legged-Bot/assets/95605860/a3618385-364a-4817-b817-a64cb9ebd6a9
+DoubleBee is a two-wheel legged robot designed for agile locomotion and inverted pendulum control tasks in Isaac Lab simulation environment. The project focuses on reinforcement learning-based velocity tracking and self-balancing control.
 
+## Available Tasks
 
-## Sim 2 Sim framework - Lab to MuJoCo
-![image](https://github.com/jaykorea/Isaac-RL-Two-wheel-Legged-Bot/assets/95605860/c242590d-b1d4-427e-8f52-4190cafc38e9)
+### 1. Flat Environment - Stand & Drive
+- **Task ID**: `Isaac-Velocity-Flat-DoubleBee-v1-ppo`
+- **Play Task ID**: `Isaac-Velocity-Flat-DoubleBee-Play-v1-ppo`
+- Standard velocity tracking on flat terrain
+- Full actuation including propeller control
 
-- Simulation to Simulation framework is available on sim2sim_onnx branch
-- You can simply inference trained policy (basically export as .onnx from isaac lab)
+### 2. Inverted Pendulum Mode
+- **Task ID**: `Isaac-Velocity-InvertedPendulum-DoubleBee-v1-ppo`
+- **Play Task ID**: `Isaac-Velocity-InvertedPendulum-DoubleBee-Play-v1-ppo`
+- Same-level target tracking
+- No height scan observations
+- No propeller actuation (pure inverted pendulum control)
 
 ## Setup
-### Install Isaac Sim
+- This repo is tested on Ubuntu 20.04, and we recommend 'local install'
+
+### 1. Install Isaac Sim
 ```
-https://docs.omniverse.nvidia.com/isaacsim/latest/installation/index.html
-```
-### Install Isaac Lab
-```
-https://isaac-sim.github.io/IsaacLab/source/setup/installation/index.html
+https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/binaries_installation.html
 ```
 
-### Install lab.flamingo package
-1. Set the ISAACSIM_PATH environment variable to point to your isaaclab installation directory(register on your environment [.bashrc])
-   ```
-   export ISAACSIM_PATH="${HOME}/.local/share/ov/pkg/isaac-sim-4.0.0"
-   export ISAACSIM_PYTHON_EXE="${ISAACSIM_PATH}/python.sh"
-   export ISAACLAB_PATH="${HOME}/IsaacLab"
-   ```
-2. clone repository
-   ```
-   git clone -b flamingo_isaac_lab_envs
-   ```
-3. replace 'source' folder into your isaaclab 'source' folder
-   ```
-   cp ${HOME}/lab.flamingo/modified_source/source ${HOME}/IsaacLab/source
-   ```
-5. install lab.flamingo pip package by running below command
-   ```
-   ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install --upgrade pip
-   ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -e .
-   ```
-### Launch script
-#### train flamingo
-on lab.flamingo root path, type
+### 2. Install Isaac Lab
 ```
-${ISAACLAB_PATH}/isaaclab.sh -p scripts/rsl_rl/train.py --task Isaac-Velocity-Flat-Flamingo-v1 --num_envs 4096 --headless
+https://github.com/isaac-sim/IsaacLab
 ```
-#### play flamingo
+
+### 3. Install DoubleBee package
+i. Clone repository
+   ```
+   git clone https://github.com/yourusername/doubleBee
+   cd doubleBee
+   ```
+
+ii. Install doubleBee pip package
+   - Run it on 'doubleBee' root path
+   ```
+   conda activate env_isaaclab  # change to your conda env
+   pip install -e .
+   ```
+
+iii. Unzip assets (USD files)
+   - Since git does not correctly upload '.usd' files, you should manually unzip the USD files in assets folder
+   ```
+   path example: lab/doublebee/assets/data/Robots/DoubleBee/
+   ```
+
+## Launch Scripts
+
+### Train DoubleBee
+Run it on 'doubleBee' root path:
+```bash
+python scripts/co_rl/train.py --task {task_name} --algo ppo --num_envs 4096 --headless --num_policy_stacks {stack_number} --num_critic_stacks {stack_number}
 ```
-${ISAACLAB_PATH}/isaaclab.sh -p scripts/rsl_rl/play.py --task Isaac-Velocity-Flat-Flamingo-Play-v1 --num_envs 32
+
+### Train Examples
+
+#### Standard Flat Environment (Stand & Drive)
+```bash
+python scripts/co_rl/train.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --algo ppo --num_envs 4096 --headless --num_policy_stacks 2 --num_critic_stacks 2
 ```
+
+#### Inverted Pendulum Mode
+```bash
+python scripts/co_rl/train.py --task Isaac-Velocity-InvertedPendulum-DoubleBee-v1-ppo --algo ppo --num_envs 4096 --headless --num_policy_stacks 2 --num_critic_stacks 2
+```
+
+### Play DoubleBee
+Run it on 'doubleBee' root path:
+```bash
+python scripts/co_rl/play.py --task {task_name} --algo ppo --num_envs 64 --num_policy_stacks {stack_number} --num_critic_stacks {stack_number} --load_run {folder_name} --checkpoint {checkpoint_file}
+```
+
+### Play Examples
+
+#### Standard Play
+```bash
+python scripts/co_rl/play.py --task Isaac-Velocity-Flat-DoubleBee-Play-v1-ppo --algo ppo --num_envs 64 --num_policy_stacks 2 --num_critic_stacks 2 --load_run 2026-02-05_19-31-16 --checkpoint model_4999.pt
+```
+
+#### Inverted Pendulum Play with Video Recording
+```bash
+python scripts/co_rl/play.py --task Isaac-Velocity-InvertedPendulum-DoubleBee-Play-v1-ppo --video --video_length 1000 --load_run 2026-02-05_19-31-16_stand_drive --checkpoint model_4999.pt
+```
+
+## Additional Options
+
+### Video Recording
+Add `--video` flag and specify length:
+```bash
+python scripts/co_rl/play.py --task Isaac-Velocity-InvertedPendulum-DoubleBee-Play-v1-ppo --video --video_length 1000 --load_run 2026-02-05_19-31-16_stand_drive --checkpoint model_4999.pt
+```
+
+### Plotting
+Disable plotting with:
+```bash
+--plot False
+```
+
+## Project Structure
+```
+doubleBee/
+├── lab/doublebee/
+│   ├── assets/              # Robot USD files and configurations
+│   ├── tasks/               # Task definitions and environment configs
+│   │   └── manager_based/
+│   │       └── locomotion/
+│   │           └── velocity/
+│   │               ├── doublebee_env/     # Environment configurations
+│   │               ├── mdp/               # MDP components (rewards, observations, etc.)
+│   │               └── terrain_config/    # Terrain configurations
+│   └── isaaclab/            # Custom Isaac Lab extensions
+├── scripts/co_rl/           # Training and evaluation scripts
+└── logs/                    # Training logs and checkpoints
+```
+
+## Acknowledgments
+
+Based on the Isaac Lab framework and inspired by the Flamingo robot project.
