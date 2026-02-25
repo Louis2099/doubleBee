@@ -5,7 +5,6 @@ logs/
 *.onnx
 outputs/
 build/
-*.usd
 urdf/
 mjcf/
 *.thumbs
