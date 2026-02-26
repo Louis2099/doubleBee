@@ -13,7 +13,7 @@ The **OnPolicyRunner** automatically logs all training metrics by default. Loggi
 Check the terminal output when training starts:
 ```
 [INFO] Logging experiment in directory: /path/to/logs/co_rl/doublebee_velocity/ppo
-Exact experiment name requested from command line: /path/to/logs/.../2025-11-07_14-51-19_stand_drive
+Exact experiment name requested from command line: /path/to/logs/.../2025-11-07_14-51-19_hybrid_stair
 ```
 
 If you see these messages, logging is **active**.
@@ -69,7 +69,7 @@ logs/
 └── co_rl/
     └── {experiment_name}/          # e.g., "doublebee_velocity"
         └── {algorithm}/            # e.g., "ppo"
-            └── {timestamp}_{run_name}/  # e.g., "2025-11-07_14-51-19_stand_drive"
+            └── {timestamp}_{run_name}/  # e.g., "2025-11-07_14-51-19_hybrid_stair"
                 ├── events.out.tfevents.*  # TensorBoard event files
                 ├── model_0.pt             # Saved model checkpoints
                 ├── model_500.pt
@@ -96,7 +96,7 @@ log_dir = os.path.join(log_root_path, log_dir)
 
 **Example Path**:
 ```
-/home/yuanliu/Louis_Project/doubleBee/logs/co_rl/doublebee_velocity/ppo/2025-11-07_14-51-19_stand_drive
+/home/yuanliu/Louis_Project/doubleBee/logs/co_rl/doublebee_velocity/ppo/2025-11-07_14-51-19_hybrid_stair
 ```
 
 ## 🎨 How to Visualize Logs
@@ -251,7 +251,7 @@ To disable logging, you would need to modify `train.py` to pass `log_dir=None` t
 tensorboard --logdir logs/co_rl
 
 # View specific experiment
-tensorboard --logdir logs/co_rl/doublebee_velocity/ppo/2025-11-07_14-51-19_stand_drive
+tensorboard --logdir logs/co_rl/doublebee_velocity/ppo/2025-11-07_14-51-19_hybrid_stair
 
 # View on specific port
 tensorboard --logdir logs/co_rl --port 6007
@@ -302,11 +302,11 @@ ls logs/co_rl/doublebee_velocity/ppo/*/events.out.tfevents.*
 
 ```
 logs/co_rl/doublebee_velocity/ppo/
-├── 2025-11-07_14-51-19_stand_drive/
+├── 2025-11-07_14-51-19_hybrid_stair/
 │   ├── events.out.tfevents.1762545082.yuanliu-legion.68754.0
 │   ├── model_0.pt
 │   └── params/
-└── 2025-11-07_22-37-56_stand_drive/
+└── 2025-11-07_22-37-56_hybrid_stair/
     ├── events.out.tfevents.1762486844.yuanliu-legion.57107.0
     └── ...
 ```

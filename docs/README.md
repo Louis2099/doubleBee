@@ -22,8 +22,8 @@ DoubleBee is a two-wheel legged robot designed for agile locomotion and inverted
 ## Available Tasks
 
 ### 1. Flat Environment - Stand & Drive
-- **Task ID**: `Isaac-Velocity-Flat-DoubleBee-v1-ppo`
-- **Play Task ID**: `Isaac-Velocity-Flat-DoubleBee-Play-v1-ppo`
+- **Task ID**: `Isaac-Velocity-HybridStair-DoubleBee-v1-ppo`
+- **Play Task ID**: `Isaac-Velocity-HybridStair-DoubleBee-Play-v1-ppo`
 - Standard velocity tracking on flat terrain
 - Full actuation including propeller control
 
@@ -79,7 +79,7 @@ python scripts/co_rl/train.py --task {task_name} --algo ppo --num_envs 4096 --he
 
 #### Standard Flat Environment (Stand & Drive)
 ```bash
-python scripts/co_rl/train.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --algo ppo --num_envs 4096 --headless --num_policy_stacks 2 --num_critic_stacks 2
+python scripts/co_rl/train.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --algo ppo --num_envs 4096 --headless --num_policy_stacks 2 --num_critic_stacks 2
 ```
 
 #### Inverted Pendulum Mode
@@ -97,12 +97,12 @@ python scripts/co_rl/play.py --task {task_name} --algo ppo --num_envs 64 --num_p
 
 #### Standard Play
 ```bash
-python scripts/co_rl/play.py --task Isaac-Velocity-Flat-DoubleBee-Play-v1-ppo --algo ppo --num_envs 64 --num_policy_stacks 2 --num_critic_stacks 2 --load_run 2026-02-05_19-31-16 --checkpoint model_4999.pt
+python scripts/co_rl/play.py --task Isaac-Velocity-HybridStair-DoubleBee-Play-v1-ppo --algo ppo --num_envs 64 --num_policy_stacks 2 --num_critic_stacks 2 --load_run 2026-02-05_19-31-16_hybrid_stair --checkpoint model_4999.pt
 ```
 
 #### Inverted Pendulum Play with Video Recording
 ```bash
-python scripts/co_rl/play.py --task Isaac-Velocity-InvertedPendulum-DoubleBee-Play-v1-ppo --video --video_length 1000 --load_run 2026-02-05_19-31-16_stand_drive --checkpoint model_4999.pt
+python scripts/co_rl/play.py --task Isaac-Velocity-InvertedPendulum-DoubleBee-Play-v1-ppo --video --video_length 1000 --load_run 2026-02-05_19-31-16_hybrid_stair --checkpoint model_4999.pt
 ```
 
 ## Additional Options
@@ -110,7 +110,7 @@ python scripts/co_rl/play.py --task Isaac-Velocity-InvertedPendulum-DoubleBee-Pl
 ### Video Recording
 Add `--video` flag and specify length:
 ```bash
-python scripts/co_rl/play.py --task Isaac-Velocity-InvertedPendulum-DoubleBee-Play-v1-ppo --video --video_length 1000 --load_run 2026-02-05_19-31-16_stand_drive --checkpoint model_4999.pt
+python scripts/co_rl/play.py --task Isaac-Velocity-InvertedPendulum-DoubleBee-Play-v1-ppo --video --video_length 1000 --load_run 2026-02-05_19-31-16_hybrid_stair --checkpoint model_4999.pt
 ```
 
 ### Plotting

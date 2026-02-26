@@ -13,7 +13,7 @@ The DoubleBee environment uses a **penalty-based reward system** where all rewar
 
 ### Primary Reward Configuration
 
-**File**: `lab/doublebee/tasks/manager_based/locomotion/velocity/doublebee_env/flat_env/stand_drive/flat_env_stand_drive_cfg.py`
+**File**: `lab/doublebee/tasks/manager_based/locomotion/velocity/doublebee_env/flat_env/hybrid_stair/hybrid_stair_cfg.py`
 
 **Lines 22-57**: `DoubleBeeRewardsCfg` class
 
@@ -238,7 +238,7 @@ In early episodes with a random policy:
 
 ### Reason 4: Episode Length
 
-**File**: `lab/doublebee/tasks/manager_based/locomotion/velocity/doublebee_env/flat_env/stand_drive/flat_env_stand_drive_cfg.py`
+**File**: `lab/doublebee/tasks/manager_based/locomotion/velocity/doublebee_env/flat_env/hybrid_stair/hybrid_stair_cfg.py`
 
 **Line 123**: Episode length is 20 seconds:
 ```python
@@ -363,7 +363,7 @@ Verify robot is actually moving:
 
 ### Solution 2: Reduce Episode Length (For Testing)
 
-**File**: `flat_env_stand_drive_cfg.py`, line 123:
+**File**: `hybrid_stair_cfg.py`, line 123:
 ```python
 self.episode_length_s = 5.0  # Reduced from 20.0
 ```

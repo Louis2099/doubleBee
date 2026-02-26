@@ -32,7 +32,7 @@ Contains three functions:
 - **`apply_thrust_with_tilt_control()`**: Advanced version accounting for servo tilt
 
 ### 2. Event Configuration
-**File**: `doublebee_env/flat_env/stand_drive/flat_env_stand_drive_cfg.py`
+**File**: `doublebee_env/flat_env/hybrid_stair/hybrid_stair_cfg.py`
 
 Aerodynamics is added as an event term:
 ```python
@@ -208,7 +208,7 @@ print(f"Expected: Z-component should be positive for upward thrust")
 
 **Solution**: Use `apply_thrust_with_tilt_control()` instead:
 ```python
-# In flat_env_stand_drive_cfg.py
+# In hybrid_stair_cfg.py
 propeller_aerodynamics = EventTerm(
     func=aerodynamics.apply_thrust_with_tilt_control,  # Changed
     ...

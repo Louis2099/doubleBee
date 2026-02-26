@@ -12,7 +12,7 @@
 
 ### Quick Test (Default Settings)
 ```bash
-python scripts/test_usd.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo
+python scripts/test_usd.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo
 ```
 
 This will:
@@ -23,23 +23,23 @@ This will:
 
 ### Headless Mode (No GUI)
 ```bash
-python scripts/test_usd.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --headless
+python scripts/test_usd.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --headless
 ```
 
 ### Multiple Environments
 ```bash
-python scripts/test_usd.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --num_envs 4
+python scripts/test_usd.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --num_envs 4
 ```
 
 ### Shorter Test Run
 ```bash
-python scripts/test_usd.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --num_steps 1000
+python scripts/test_usd.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --num_steps 1000
 ```
 
 ## Command-Line Arguments
 
 ### Required Arguments
-- `--task`: Gym task ID to test (e.g., `Isaac-Velocity-Flat-DoubleBee-v1-ppo`)
+- `--task`: Gym task ID to test (e.g., `Isaac-Velocity-HybridStair-DoubleBee-v1-ppo`)
 
 ### Optional Arguments
 - `--num_envs`: Number of parallel environments to create (default: `1`)
@@ -57,13 +57,13 @@ python scripts/test_usd.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --num_ste
 ### 1. Quick Robot Validation
 Test if the robot loads correctly:
 ```bash
-python scripts/test_usd.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --num_steps 100 --headless
+python scripts/test_usd.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --num_steps 100 --headless
 ```
 
 ### 2. Joint Movement Test
 Verify that all joints respond to commands:
 ```bash
-python scripts/test_usd.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --num_steps 200
+python scripts/test_usd.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --num_steps 200
 ```
 
 The script will automatically test:
@@ -74,13 +74,13 @@ The script will automatically test:
 ### 3. Hovering Test
 Test if propellers can generate enough thrust to hover:
 ```bash
-python scripts/test_usd.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --hover --num_steps 5000
+python scripts/test_usd.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --hover --num_steps 5000
 ```
 
 ### 4. Multi-Environment Test
 Test with multiple parallel environments:
 ```bash
-python scripts/test_usd.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --num_envs 8 --headless
+python scripts/test_usd.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --num_envs 8 --headless
 ```
 
 ## Output Information
@@ -138,7 +138,7 @@ If you encounter errors:
 ## Example Output
 
 ```
-[INFO] Environment 'Isaac-Velocity-Flat-DoubleBee-v1-ppo' loaded. Observation shape: {'policy': torch.Size([1, 48])}
+[INFO] Environment 'Isaac-Velocity-HybridStair-DoubleBee-v1-ppo' loaded. Observation shape: {'policy': torch.Size([1, 48])}
 [DEBUG] Scene entities: ['robot', 'terrain', 'height_scanner', 'contact_forces', 'light', 'dome_light']
 [DEBUG] Robot type: <class 'isaaclab.assets.articulation.Articulation'>
 [DEBUG] Robot prim path: /World/envs/env_.*/Doublebee

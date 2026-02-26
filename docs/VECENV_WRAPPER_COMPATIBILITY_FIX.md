@@ -151,7 +151,7 @@ Run training to verify the fix:
 
 ```bash
 cd /home/yuanliu/Louis_Project/doubleBee
-python scripts/co_rl/train.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --num_envs 2
+python scripts/co_rl/train.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --num_envs 2
 ```
 
 Expected output:

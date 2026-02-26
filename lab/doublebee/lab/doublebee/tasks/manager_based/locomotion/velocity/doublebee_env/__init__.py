@@ -14,23 +14,23 @@ from .velocity_env_cfg import DoubleBeeVelocityEnvCfg
 # Register Gym environments.
 ##
 
-# Register DoubleBee velocity control tasks
+# Register DoubleBee velocity control tasks (hybrid: propeller + wheel on staircase)
 gym.register(
-    id="Isaac-Velocity-Flat-DoubleBee-v1-ppo",
+    id="Isaac-Velocity-HybridStair-DoubleBee-v1-ppo",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": flat_env.stand_drive.flat_env_stand_drive_cfg.DoubleBeeFlatStandDriveCfg,
+        "env_cfg_entry_point": flat_env.hybrid_stair.hybrid_stair_cfg.DoubleBeeHybridStairCfg,
         "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
     },
 )
 
 gym.register(
-    id="Isaac-Velocity-Flat-DoubleBee-Play-v1-ppo",
+    id="Isaac-Velocity-HybridStair-DoubleBee-Play-v1-ppo",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": flat_env.stand_drive.flat_env_stand_drive_cfg.DoubleBeeFlatStandDriveCfg,
+        "env_cfg_entry_point": flat_env.hybrid_stair.hybrid_stair_cfg.DoubleBeeHybridStairCfg,
         "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
     },
 )

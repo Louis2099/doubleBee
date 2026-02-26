@@ -30,15 +30,15 @@ def verify_spawn_positions(num_envs: int = 16, platform_width: float = 4.0, head
     import torch
     
     # Import after AppLauncher has initialized Isaac Sim
-    from lab.doublebee.tasks.manager_based.locomotion.velocity.doublebee_env.flat_env.stand_drive.flat_env_stand_drive_cfg import (
-        DoubleBeeFlatStandDriveCfg,
+    from lab.doublebee.tasks.manager_based.locomotion.velocity.doublebee_env.flat_env.hybrid_stair.hybrid_stair_cfg import (
+        DoubleBeeHybridStairCfg,
     )
     from lab.doublebee.isaaclab.isaaclab.envs import ManagerBasedConstraintRLEnv
     
     print(f"[INFO] Initializing environment with {num_envs} environments...")
     
     # Create environment configuration
-    cfg = DoubleBeeFlatStandDriveCfg()
+    cfg = DoubleBeeHybridStairCfg()
     cfg.scene.num_envs = num_envs
     
     # Create environment (just cfg, no agent_cfg needed for verification)

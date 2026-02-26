@@ -25,7 +25,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--task",
         type=str,
-        default="Isaac-Velocity-Flat-DoubleBee-v1-ppo",
+        default="Isaac-Velocity-HybridStair-DoubleBee-v1-ppo",
         help="Gym task ID to instantiate.",
     )
     parser.add_argument(

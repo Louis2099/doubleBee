@@ -10,7 +10,7 @@ Decoupled design:
 - No height-scanner: scene has no height_scanner; observations use ObservationsCfgNoHeightScan.
 - No propeller or servo actuation: actions use ActionsCfgWheelsOnly (wheels only).
 
-This file composes overrides on top of DoubleBeeFlatStandDriveCfg so the rest of the
+This file composes overrides on top of DoubleBeeHybridStairCfg so the rest of the
 pipeline (rewards, constraints, commands, events for reset/wheel friction) is reused.
 """
 
@@ -21,8 +21,8 @@ from isaaclab.utils import configclass
 
 from lab.doublebee.assets.doublebee import DOUBLEBEE_CFG
 from lab.doublebee.tasks.manager_based.locomotion.velocity.doublebee_env.velocity_env_cfg import DoubleBeeVelocityEnvCfg
-from lab.doublebee.tasks.manager_based.locomotion.velocity.doublebee_env.flat_env.stand_drive.flat_env_stand_drive_cfg import (
-    DoubleBeeFlatStandDriveCfg,
+from lab.doublebee.tasks.manager_based.locomotion.velocity.doublebee_env.flat_env.hybrid_stair.hybrid_stair_cfg import (
+    DoubleBeeHybridStairCfg,
 )
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import events as mdp
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.observations import ObservationsCfgNoHeightScan
@@ -78,7 +78,7 @@ class DoubleBeeEventsCfgInvertedPendulum:
 
 
 @configclass
-class DoubleBeeInvertedPendulumCfg(DoubleBeeFlatStandDriveCfg):
+class DoubleBeeInvertedPendulumCfg(DoubleBeeHybridStairCfg):
     """Configuration for inverted-pendulum experiment.
 
     - Destination at same level as robot (flat plane, init and target patches at same Z).
@@ -95,7 +95,7 @@ class DoubleBeeInvertedPendulumCfg(DoubleBeeFlatStandDriveCfg):
     # CRITICAL: Override scene at class level by defining a nested SceneCfg
     # This is the proper Isaac Lab pattern - scene is built with correct config from start
     @configclass
-    class SceneCfg(DoubleBeeFlatStandDriveCfg.SceneCfg):
+    class SceneCfg(DoubleBeeHybridStairCfg.SceneCfg):
         """Scene configuration for inverted pendulum - same-level terrain, no height scanner."""
         
         # Disable height scanner for this experiment

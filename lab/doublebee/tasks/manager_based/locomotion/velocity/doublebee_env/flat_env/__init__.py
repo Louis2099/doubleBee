@@ -5,12 +5,12 @@
 
 """Flat terrain environments for DoubleBee robot."""
 
-from .stand_drive.flat_env_stand_drive_cfg import DoubleBeeFlatStandDriveCfg, DoubleBeeFlatStandDriveCfg_PLAY
+from .hybrid_stair.hybrid_stair_cfg import DoubleBeeHybridStairCfg, DoubleBeeHybridStairCfg_PLAY
 from .inverted_pendulum import DoubleBeeInvertedPendulumCfg, DoubleBeeInvertedPendulumCfg_PLAY
 
 __all__ = [
-    "DoubleBeeFlatStandDriveCfg",
-    "DoubleBeeFlatStandDriveCfg_PLAY",
+    "DoubleBeeHybridStairCfg",
+    "DoubleBeeHybridStairCfg_PLAY",
     "DoubleBeeInvertedPendulumCfg",
     "DoubleBeeInvertedPendulumCfg_PLAY",
 ]

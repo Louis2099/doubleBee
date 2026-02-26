@@ -19,7 +19,7 @@ class DoubleBeeCoRlCfg(CoRlPolicyRunnerCfg):
 
     # Experiment settings
     experiment_name: str = "doublebee_velocity"
-    run_name: str = "stand_drive"
+    run_name: str = "hybrid_stair"
     description: str = "DoubleBee robot velocity control with propellers"
 
     # Algorithm settings

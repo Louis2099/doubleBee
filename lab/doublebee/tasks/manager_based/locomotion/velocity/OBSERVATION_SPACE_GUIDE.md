@@ -259,7 +259,7 @@ To verify observations are working correctly:
 
 ```python
 # In your training script or debugging session
-env = gym.make("Isaac-Velocity-Flat-DoubleBee-v1-ppo")
+env = gym.make("Isaac-Velocity-HybridStair-DoubleBee-v1-ppo")
 obs, _ = env.reset()
 
 print("Observation keys:", obs.keys())

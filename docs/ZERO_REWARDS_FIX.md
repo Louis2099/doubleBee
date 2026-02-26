@@ -168,7 +168,7 @@ Episode_Constraint/time_out: 0
 Run training again:
 
 ```bash
-python scripts/co_rl/train.py --task Isaac-Velocity-Flat-DoubleBee-v1-ppo --num_envs 2
+python scripts/co_rl/train.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --num_envs 2
 ```
 
 Expected output (should appear within 1-2 iterations):

@@ -269,18 +269,17 @@ class ObservationsCfg:
         
         Observation Space Components:
         1. Wheel velocities (2) - Ground locomotion speed
-        2. Base linear velocity (3) - Robot velocity in body frame [vx, vy, vz]
-        3. Base angular velocity (3) - Robot rotation rates [wx, wy, wz]
-        4. Base orientation (3) - Projected gravity vector (encodes roll/pitch)
-        5. Height scan (36) - 6x6 elevation map around robot
-        6. Wheel-ground contact (2) - Binary per wheel: [left, right] (1.0=contact, 0.0=airborne)
-        7. Velocity commands (3) - Desired velocities [vx, vy, wz]
-        8. Last actions (N) - Previous control actions
+        2. Servo positions (2) - Propeller tilt angles
+        3. Propeller velocities (2) - Propeller rotation speeds
+        4. Base linear velocity (3) - Robot velocity in body frame [vx, vy, vz]
+        5. Base angular velocity (3) - Robot rotation rates [wx, wy, wz]
+        6. Base orientation (3) - Projected gravity vector (encodes roll/pitch)
+        7. Height scan (36) - 6x6 elevation map around robot
+        8. Wheel-ground contact (2) - Binary per wheel: [left, right] (1.0=contact, 0.0=airborne)
+        9. Velocity commands (3) - Desired velocities [vx, vy, wz]
+        10. Last actions (N) - Previous control actions
         
-        Total observations: ~52+N dimensions (exact count depends on action space)
-        
-        Note: Servo positions and propeller velocities are excluded from observations
-        to simplify the observation space for the inverted pendulum task.
+        Total observations: ~59+ dimensions (exact count depends on action space)
         """
 
         # ========================================
