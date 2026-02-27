@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 import carb  # For logging
 
+from .thrust_energy_model import pwm_to_thrust
+
 
 def apply_propeller_aerodynamics(
     env: ManagerBasedEnv,
@@ -90,12 +92,23 @@ def apply_propeller_aerodynamics(
     # Get propeller angular velocities (rad/s) - shape: [num_envs, num_propellers]
     propeller_vel = robot.data.joint_vel[:, propeller_joint_ids]
     
+    """
+    NOTE:
+    Thrust calculation (from PWM signal):
+    propeller_vel is the PWM signal here. pwm_to_thrust returns numpy; convert to tensor.
+    """
+    pwm_np = propeller_vel.cpu().numpy()
+    thrust_np = pwm_to_thrust(10*pwm_np, target="thrust")
+    thrust_magnitude = torch.as_tensor(
+        thrust_np, device=robot.device, dtype=propeller_vel.dtype
+    )
+
     # Calculate thrust force: F = k_t * ω²
     # Using absolute value to always generate positive thrust
-    thrust_magnitude = thrust_coefficient * torch.square(propeller_vel)
+    #thrust_magnitude = thrust_coefficient * torch.square(propeller_vel)
     
     # Clamp thrust to maximum value
-    thrust_magnitude = torch.clamp(thrust_magnitude, max=max_thrust_per_propeller)
+    # thrust_magnitude = torch.clamp(thrust_magnitude, max=max_thrust_per_propeller)
     
     # Get propeller body orientations in world frame
     # Shape: [num_envs, num_propellers, 4] (quaternions)
@@ -273,131 +286,4 @@ def apply_propeller_aerodynamics(
         # Are external forces actually set?
         print(f"  External forces applied: {external_forces[0, propeller_body_ids].sum():.2f} N")
         print(f"  External forces Z-axis applied: {external_forces[0, propeller_body_ids, 2].sum():.2f} N")
-
-def apply_simple_propeller_thrust(
-    env: ManagerBasedEnv,
-    env_ids: torch.Tensor,
-    propeller_joint_names: tuple[str, str],
-    thrust_coefficient: float,
-    max_total_thrust: float,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-):
-    """
-    Simplified aerodynamics: Apply combined thrust to robot base link.
-    
-    This is an easier starting point - thrust from both propellers is combined
-    and applied to the robot's base link. Good for initial testing.
-    
-    Args:
-        env: The environment instance
-        asset_cfg: Configuration for the robot asset
-        propeller_joint_names: Names of propeller joints
-        thrust_coefficient: Thrust coefficient (k_t)
-        max_total_thrust: Maximum total thrust force (N)
-    """
-    robot: Articulation = env.scene[asset_cfg.name]
-    
-    # Get propeller joint indices
-    propeller_joint_ids = torch.tensor(
-        [robot.joint_names.index(name) for name in propeller_joint_names],
-        dtype=torch.long,
-        device=robot.device
-    )
-    
-    # Get propeller angular velocities
-    propeller_vel = robot.data.joint_vel[:, propeller_joint_ids]  # [num_envs, 2]
-    
-    # Calculate total thrust (sum of both propellers)
-    # F_total = k_t * (ω_left² + ω_right²)
-    total_thrust_magnitude = thrust_coefficient * torch.sum(torch.square(propeller_vel), dim=1)
-    total_thrust_magnitude = torch.clamp(total_thrust_magnitude, max=max_total_thrust)
-    
-    # Get robot base orientation (quaternion)
-    base_quat_w = robot.data.root_quat_w  # [num_envs, 4]
-    
-    # Define thrust direction in robot base frame
-    # Assuming robot's up direction is Z-axis in local frame
-    thrust_local = torch.zeros(env.num_envs, 3, device=robot.device)
-    thrust_local[:, 2] = total_thrust_magnitude  # Z-axis (upward)
-    
-    # Rotate to world frame
-    thrust_world = quat_rotate(base_quat_w, thrust_local)  # [num_envs, 3]
-    
-    # Apply force to base link (body index 0)
-    external_forces = torch.zeros(env.num_envs, robot.num_bodies, 3, device=robot.device)
-    external_torques = torch.zeros(env.num_envs, robot.num_bodies, 3, device=robot.device)
-    
-    external_forces[:, 0, :] = thrust_world  # Apply to base link
-    
-    # Apply to simulation
-    robot.set_external_force_and_torque(external_forces, external_torques, body_ids=None)
-    # robot.write_external_force_and_torque_to_sim(torch.zeros_like(external_forces), 
-    #                                             torch.zeros_like(external_torques), 
-    #                                             body_ids=None)
-
-
-def apply_thrust_with_tilt_control(
-    env: ManagerBasedEnv,
-    env_ids: torch.Tensor,
-    propeller_joint_names: tuple[str, str],
-    propeller_servo_joint_names: tuple[str, str],
-    propeller_body_names: tuple[str, str],
-    thrust_coefficient: float,
-    max_thrust_per_propeller: float,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-):
-    """
-    Advanced aerodynamics: Apply thrust considering propeller tilt angle.
-    
-    This version accounts for the propeller servo angles, allowing for vectored thrust.
-    The thrust direction is affected by both the propeller servo angle and body orientation.
-    
-    Args:
-        env: The environment instance
-        asset_cfg: Configuration for the robot asset
-        propeller_joint_names: Names of propeller rotation joints
-        propeller_servo_joint_names: Names of propeller servo (tilt) joints
-        propeller_body_names: Names of propeller bodies
-        thrust_coefficient: Thrust coefficient
-        max_thrust_per_propeller: Maximum thrust per propeller
-    """
-    robot: Articulation = env.scene[asset_cfg.name]
-    
-    # Get joint and body indices
-    propeller_joint_ids = torch.tensor(
-        [robot.joint_names.index(name) for name in propeller_joint_names],
-        dtype=torch.long,
-        device=robot.device
-    )
-    propeller_body_ids = torch.tensor(
-        [robot.body_names.index(name) for name in propeller_body_names],
-        dtype=torch.long,
-        device=robot.device
-    )
-    
-    # Get propeller angular velocities
-    propeller_vel = robot.data.joint_vel[:, propeller_joint_ids]
-    
-    # Calculate thrust magnitude
-    thrust_magnitude = thrust_coefficient * torch.square(propeller_vel)
-    thrust_magnitude = torch.clamp(thrust_magnitude, max=max_thrust_per_propeller)
-    
-    # Get propeller body orientations (already includes servo tilt)
-    propeller_quat_w = robot.data.body_quat_w[:, propeller_body_ids, :]
-    
-    # Thrust direction in propeller local frame (Z-axis)
-    thrust_local = torch.zeros(env.num_envs, len(propeller_joint_ids), 3, device=robot.device)
-    thrust_local[:, :, 2] = thrust_magnitude
-    
-    # Rotate to world frame (this automatically accounts for tilt)
-    thrust_world = quat_rotate(propeller_quat_w, thrust_local)
-    
-    # Prepare and apply forces
-    external_forces = torch.zeros(env.num_envs, robot.num_bodies, 3, device=robot.device)
-    external_torques = torch.zeros(env.num_envs, robot.num_bodies, 3, device=robot.device)
-    
-    for i, body_id in enumerate(propeller_body_ids):
-        external_forces[:, body_id, :] = thrust_world[:, i, :]
-    
-    robot.set_external_force_and_torque(external_forces, external_torques, body_ids=None)
 

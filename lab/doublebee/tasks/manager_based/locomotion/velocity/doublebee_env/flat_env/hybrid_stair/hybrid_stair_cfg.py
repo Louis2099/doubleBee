@@ -78,16 +78,26 @@ class DoubleBeeEventsCfg:
         },
     )
 
-    # NOTE: Reset robot state on reset - use terrain flat patches for spawn position
+    # NOTE: Reset/spawn is controlled here. Position is sampled from terrain "init_pos" flat patches.
+    # - pose_range: roll, pitch, yaw in rad. Only orientation is randomized (position from terrain).
+    # - velocity_range: x, y, z in m/s (linear); roll, pitch, yaw in rad/s (angular). Sampled uniformly.
+    # To randomize initial velocity and orientation, set non-zero (min, max) for the desired keys.
     reset_base = EventTerm(
         func=mdp.reset_root_state_from_terrain,
         mode="reset",
         params={
-            "pose_range": {"yaw": (-3.14, 3.14)},  # Only orientation, position comes from terrain
+            "pose_range": {
+                "roll": (0.0, 0.0),   # (min, max) rad — e.g. (-0.1, 0.1) for small roll
+                "pitch": (-0.0, 0.0),  # (min, max) rad
+                "yaw_noise": (-0.0, 0.0),  # rad, added to target-facing yaw (default in code if omitted)
+            },
             "velocity_range": {
-                "x": (0.0, 0.0),  # Initialize with zero velocity
-                "y": (0.0, 0.0),
+                "x": (-0.0, 0.0),   # linear m/s
+                "y": (-0.0, 0.0),
                 "z": (0.0, 0.0),
+                "roll": (-0.0, 0.0),   # angular rad/s
+                "pitch": (-0.0, 0.0),
+                "yaw": (-0.0, 0.0),
             },
         },
     )

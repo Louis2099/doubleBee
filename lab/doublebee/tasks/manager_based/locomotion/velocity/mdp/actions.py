@@ -5,8 +5,12 @@
 
 from __future__ import annotations
 
+import math
 import isaaclab.envs.mdp as mdp
 from isaaclab.utils import configclass
+
+# ±45° in rad, for servo position scale so that policy [-1, 1] → [-45°, 45°]
+SERVO_POS_LIMIT_RAD = math.pi / 4  # 0.785 rad
 
 
 @configclass
@@ -34,19 +38,19 @@ class ActionsCfg:
     )
 
     # Propeller servo position actions (for propeller tilt control)
-    # Split into left and right to allow sign inversion for opposite directions
-    # Right servo is inverted (negative scale) so servos can move in opposite directions
+    # Policy output [-1, 1] → position in [-scale, scale] rad. Scale = π/4 gives ±45°.
+    # Right servo uses negative scale so both servos move in opposite directions.
     propeller_servo_pos_left = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=["leftPropellerServo"],
-        scale=2.0,
+        scale=SERVO_POS_LIMIT_RAD,  # ±45° (π/4 rad)
         use_default_offset=False,
         preserve_order=True,
     )
     propeller_servo_pos_right = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=["rightPropellerServo"],
-        scale=-2.0,  # Negative scale to invert for opposite direction
+        scale=-SERVO_POS_LIMIT_RAD,  # ±45°, inverted for opposite direction
         use_default_offset=False,
         preserve_order=True,
     )
@@ -58,7 +62,8 @@ class ActionsCfg:
         asset_name="robot",
         joint_names=["leftPropeller"],
         # scale=500.0,
-        scale=300.0,
+        # scale=300.0, # for speed based thrust model
+        scale = 100.0, # for PWM based thrust model, the actual scale is 2000, 10 is multiplied in aerodynamics.py to prevent large rotational forces
         # scale=6.0,
         use_default_offset=False,
         preserve_order=True,
@@ -68,7 +73,8 @@ class ActionsCfg:
         joint_names=["rightPropeller"],
         #scale=-500.0,  # Negative scale to invert for gyroscopic balance
         # scale=-6.0,
-        scale=-300.0,
+        # scale=-300.0, # for speed based thrust model
+        scale=-100.0, # for PWM based thrust model
         use_default_offset=False,
         preserve_order=True,
     )

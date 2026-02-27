@@ -336,6 +336,64 @@ def penalize_angular_velocity(env) -> torch.Tensor:
     return scaled_penalty
 
 
+def penalize_propeller_on_flat_ground(env, flatness_threshold: float = 0.03) -> torch.Tensor:
+    """Penalty for using propellers on flat ground where wheels should suffice.
+    
+    Determines ground flatness from height scanner variance. If ground is flat
+    (std dev < threshold) and propellers are being used, applies a penalty
+    proportional to propeller usage.
+    
+    Args:
+        env: The environment instance
+        flatness_threshold: Standard deviation threshold (m) below which ground is considered flat.
+                          Default 0.03m means if terrain height variation < 3cm, it's flat.
+        
+    Returns:
+        torch.Tensor: Scaled penalty per environment [num_envs] in range [-1, 0]
+        - Values closer to -1 when ground is flat AND propellers are used heavily
+        - Values closer to 0 when ground is not flat OR propellers not used
+    """
+    robot = env.scene["robot"]
+    
+    try:
+        # Get height scanner data - use try-except since "in" operator doesn't work with InteractiveScene
+        height_scanner = env.scene["height_scanner"]
+        height_data = height_scanner.data.ray_hits_w  # [num_envs, num_rays, 3] - world positions
+        
+        # Extract Z (height) component
+        heights = height_data[..., 2]  # [num_envs, num_rays]
+        
+        # Compute standard deviation of heights for each environment
+        # Low std dev = flat ground, high std dev = uneven terrain
+        height_std = torch.std(heights, dim=1)  # [num_envs]
+        
+        # Determine if ground is flat (1 = flat, 0 = not flat)
+        is_flat = (height_std < flatness_threshold).float()  # [num_envs]
+        
+        # Get propeller usage (joint velocities)
+        left_propeller_idx = robot.joint_names.index("leftPropeller")
+        right_propeller_idx = robot.joint_names.index("rightPropeller")
+        
+        propeller_velocities = robot.data.joint_vel[:, [left_propeller_idx, right_propeller_idx]]  # [num_envs, 2]
+        
+        # Compute propeller usage magnitude (sum of absolute velocities)
+        propeller_usage = torch.sum(torch.abs(propeller_velocities), dim=1)  # [num_envs]
+        
+        # Normalize propeller usage to [0, 1] range using tanh
+        # High propeller speeds -> closer to 1, low speeds -> closer to 0
+        normalized_usage = torch.tanh(propeller_usage / 200.0)  # [num_envs], scale by 200 for typical velocities
+        
+        # Penalty = is_flat * normalized_usage, scaled to [-1, 0]
+        # Only penalize when BOTH ground is flat AND propellers are used
+        penalty = -is_flat * normalized_usage  # [num_envs]
+        
+        return penalty
+        
+    except (ValueError, IndexError, KeyError):
+        # If height_scanner or propeller joints not found, return zero penalty
+        return torch.zeros(robot.num_instances, device=robot.device)
+
+
 @configclass
 class RewardsCfg:
     """Reward specifications for DoubleBee velocity tracking task."""
@@ -401,13 +459,21 @@ class RewardsCfg:
 
     #========== Efficiency Rewards ==========
     
-    propeller_efficiency = RewTerm(
-        func=penalize_propeller_efficiency,
-        weight=0.005,
-    )
+    # propeller_efficiency = RewTerm(
+    #     func=penalize_propeller_efficiency,
+    #     weight=0.005,
+    # )
     """Penalty for excessive propeller speeds to encourage efficiency.
     Computes penalty based on propeller joint velocities, scaled to [-1, 0] using e^(-x) - 1.
     Since thrust ∝ ω², high speeds are inefficient."""
+    
+    # propeller_on_flat_ground = RewTerm(
+    #     func=penalize_propeller_on_flat_ground,
+    #     weight=10.0,
+    # )
+    """Penalty for using propellers on flat ground where wheels should suffice.
+    Uses height scanner to detect flat terrain (std dev < 0.05m).
+    Penalizes propeller usage when ground is flat, encouraging wheel-only locomotion on even terrain."""
 
     # ========== Stability Rewards ==========
     
@@ -470,7 +536,9 @@ class RewardsCfgInvertedPendulum(RewardsCfg):
 
     Deprecates propeller-related shaping rewards; terminal and task rewards unchanged.
     - propeller_efficiency: removed (no propeller actuation).
+    - propeller_on_flat_ground: removed (no propeller actuation).
     - terminal_propeller_collision: kept (still penalize if propellers touch obstacles).
     """
 
     propeller_efficiency = None
+    propeller_on_flat_ground = None

@@ -638,8 +638,10 @@ def reset_root_state_from_terrain_aligned(
     Args:
         env: The environment instance.
         env_ids: Environment indices to reset.
-        pose_range: Dictionary of pose ranges (only roll/pitch are used, yaw is computed from target direction).
-        velocity_range: Dictionary of velocity ranges (not used, velocities set to zero).
+        pose_range: Dictionary of pose ranges. Keys: roll, pitch (rad); yaw_noise (min, max) in rad added to
+            target-facing yaw (default ±0.15 rad). yaw itself is computed from target direction.
+        velocity_range: Dictionary of velocity ranges. Keys: x, y, z (m/s); roll, pitch, yaw (rad/s).
+            Sampled uniformly per reset. Use (0, 0) for zero, or (min, max) for domain randomization.
         asset_cfg: Configuration for the asset to reset.
         align_axis: Which axis to align on ("x" or "y"). Defaults to "x".
             - "x": Start and end have same X coordinate (robot moves along Y axis)
@@ -765,10 +767,18 @@ def reset_root_state_from_terrain_aligned(
         # atan2(x, y) gives angle from +Y axis to vector [x, y]
         # This is the correct yaw angle for a robot that faces +Y
         yaw = torch.atan2(direction_xy[0], direction_xy[1])  # Angle from +Y axis in XY plane
-        
+        # Add small random yaw noise (rad). e.g. ±0.15 rad ≈ ±8.6°
+        yaw_noise_range = pose_range.get("yaw_noise", (-0.1, 0.1))
+        yaw_noise = math_utils.sample_uniform(
+            torch.tensor(yaw_noise_range[0], device=env.device),
+            torch.tensor(yaw_noise_range[1], device=env.device),
+            (1,), device=env.device
+        )[0]
+        yaw = yaw + yaw_noise
+
         # Sample roll and pitch from pose_range (if provided)
         roll_range = pose_range.get("roll", (0.0, 0.0))
-        pitch_range = pose_range.get("pitch", (0.0, 0.0))
+        pitch_range = pose_range.get("pitch", (-0.1, 0.1)) # small pitch randomization to prevent robot from tipping over
         roll = math_utils.sample_uniform(
             torch.tensor(roll_range[0], device=env.device),
             torch.tensor(roll_range[1], device=env.device),
@@ -783,9 +793,12 @@ def reset_root_state_from_terrain_aligned(
         # Convert to quaternion
         orientations[i, :] = math_utils.quat_from_euler_xyz(roll, pitch, yaw)
     
-    # Set initial velocities to zero
-    velocities = torch.zeros((len(env_ids), 6), device=asset.device, dtype=asset.data.default_root_state.dtype)
-    
+    # Sample initial velocities from velocity_range (keys: x, y, z m/s; roll, pitch, yaw rad/s)
+    range_list = [velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
+    ranges = torch.tensor(range_list, device=asset.device)
+    vel_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=asset.device)
+    velocities = vel_samples.to(dtype=asset.data.default_root_state.dtype)
+
     # Set into the physics simulation
     asset.write_root_link_pose_to_sim(torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
     asset.write_root_com_velocity_to_sim(velocities, env_ids=env_ids)
