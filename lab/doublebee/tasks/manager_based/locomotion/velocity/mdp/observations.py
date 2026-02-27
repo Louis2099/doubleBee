@@ -293,16 +293,16 @@ class ObservationsCfg:
         )
         
         # Servo positions - Critical for propeller orientation control
-        servo_pos = ObsTerm(
-            func=servo_positions,
-            # No scaling needed, positions are already in [-1.57, 1.57] (±90°)
-        )
+        # servo_pos = ObsTerm(
+        #     func=servo_positions,
+        #     # No scaling needed, positions are already in [-1.57, 1.57] (±90°)
+        # )
         
         # Propeller velocities - For thrust generation feedback
-        propeller_vel = ObsTerm(
-            func=propeller_velocities,
-            scale=0.01,  # Scale down high propeller speeds (typ. 0-600 rad/s)
-        )
+        # propeller_vel = ObsTerm(
+        #     func=propeller_velocities,
+        #     scale=0.01,  # Scale down high propeller speeds (typ. 0-600 rad/s)
+        # )
 
         # ========================================
         # 2. Base State (Robot body motion)
