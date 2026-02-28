@@ -330,14 +330,14 @@ class ObservationsCfg:
         # ========================================
         
         # Height scan - 6x6 grid showing terrain elevation around robot
-        height_scan = ObsTerm(
-            func=height_scan,
-            params={
-                "sensor_cfg": SceneEntityCfg("height_scanner"),
-                "offset": 0.0,  # No offset, raw heights
-            },
-            clip=(-1.0, 1.0),  # Clip to reasonable height range
-        )
+        # height_scan = ObsTerm(
+        #     func=height_scan,
+        #     params={
+        #         "sensor_cfg": SceneEntityCfg("height_scanner"),
+        #         "offset": 0.0,  # No offset, raw heights
+        #     },
+        #     clip=(-1.0, 1.0),  # Clip to reasonable height range
+        # )
         
         # Wheel contact - Binary indicator if wheels touch ground
         wheel_ground_contact = ObsTerm(

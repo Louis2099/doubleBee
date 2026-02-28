@@ -768,7 +768,7 @@ def reset_root_state_from_terrain_aligned(
         # This is the correct yaw angle for a robot that faces +Y
         yaw = torch.atan2(direction_xy[0], direction_xy[1])  # Angle from +Y axis in XY plane
         # Add small random yaw noise (rad). e.g. ±0.15 rad ≈ ±8.6°
-        yaw_noise_range = pose_range.get("yaw_noise", (-0.1, 0.1))
+        yaw_noise_range = pose_range.get("yaw_noise", (0.0, 0.0))
         yaw_noise = math_utils.sample_uniform(
             torch.tensor(yaw_noise_range[0], device=env.device),
             torch.tensor(yaw_noise_range[1], device=env.device),

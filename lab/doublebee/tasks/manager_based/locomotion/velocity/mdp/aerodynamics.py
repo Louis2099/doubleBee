@@ -31,19 +31,18 @@ def apply_propeller_aerodynamics(
     propeller_joint_names: tuple[str, str],
     propeller_body_names: tuple[str, str],
     thrust_coefficient: float,
-    drag_coefficient: float,
     max_thrust_per_propeller: float,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     visualize: bool = False,
     visualize_scale: float = 0.2,
 ):
     """
-    Apply aerodynamic thrust and drag forces to propellers based on their angular velocity.
+    Apply aerodynamic thrust forces to propellers based on PWM signal (propeller velocity).
     
-    This function is inspired by IsaacLab's quadcopter implementation:
-    - Thrust is proportional to the square of angular velocity: F = k_t * ω²
-    - Drag torque opposes rotation: τ = k_d * ω²
+    This function uses a regression-based PWM-to-thrust model for realistic thrust calculation.
+    - Thrust is computed from PWM signal using pwm_to_thrust() regression model
     - Forces are applied in world frame to propeller bodies
+    - No drag torque is applied (removed since using PWM model)
     
     The thrust direction is determined by the propeller body orientation in world frame.
     For DoubleBee, propellers rotate around Z-axis, so thrust is along Z-axis in local frame.
@@ -51,10 +50,9 @@ def apply_propeller_aerodynamics(
     Args:
         env: The environment instance (provided automatically by event manager)
         asset_cfg: Configuration for the robot asset
-        propeller_joint_names: Names of propeller joints (to get angular velocity)
+        propeller_joint_names: Names of propeller joints (to get PWM signal / angular velocity)
         propeller_body_names: Names of propeller bodies (to apply forces)
-        thrust_coefficient: Thrust coefficient (k_t). Typical range: 0.01-1.0
-        drag_coefficient: Drag coefficient (k_d). Typical range: 0.001-0.1
+        thrust_coefficient: Thrust coefficient (unused, kept for compatibility)
         max_thrust_per_propeller: Maximum thrust force per propeller (N)
     
     Note:
@@ -92,13 +90,37 @@ def apply_propeller_aerodynamics(
     # Get propeller angular velocities (rad/s) - shape: [num_envs, num_propellers]
     propeller_vel = robot.data.joint_vel[:, propeller_joint_ids]
     
+    # Debug: Print propeller velocities for first few steps
+    # if not hasattr(apply_propeller_aerodynamics, '_vel_debug_counter'):
+    #     apply_propeller_aerodynamics._vel_debug_counter = 0
+    
+    # if apply_propeller_aerodynamics._vel_debug_counter < 10:
+    #     apply_propeller_aerodynamics._vel_debug_counter += 1
+    #     print(f"\n[AERO VEL DEBUG] Step {apply_propeller_aerodynamics._vel_debug_counter}")
+    #     print(f"  Propeller joint IDs: {propeller_joint_ids}")
+    #     print(f"  Propeller velocities (raw joint_vel): {propeller_vel[0]}")
+    #     print(f"  Left propeller vel: {propeller_vel[0, 0].item():.2f}, Right propeller vel: {propeller_vel[0, 1].item():.2f}")
+    
     """
     NOTE:
     Thrust calculation (from PWM signal):
     propeller_vel is the PWM signal here. pwm_to_thrust returns numpy; convert to tensor.
     """
     pwm_np = propeller_vel.cpu().numpy()
-    thrust_np = pwm_to_thrust(10*pwm_np, target="thrust")
+    pwm_np *= 3.25 # scale up to 2000
+    
+    
+    # Debug: Show PWM values before thrust calculation
+    # if apply_propeller_aerodynamics._vel_debug_counter <= 10:
+    #     print(f"  PWM values: {pwm_np[0]}")
+    
+    thrust_np = pwm_to_thrust(abs(pwm_np), target="thrust")
+    
+    # Debug: Show thrust output
+    # if apply_propeller_aerodynamics._vel_debug_counter <= 10:
+    #     print(f"  Thrust from model: {thrust_np[0]}")
+    #     print(f"  Left thrust: {thrust_np[0, 0]:.2f}N, Right thrust: {thrust_np[0, 1]:.2f}N")
+    
     thrust_magnitude = torch.as_tensor(
         thrust_np, device=robot.device, dtype=propeller_vel.dtype
     )
@@ -124,45 +146,49 @@ def apply_propeller_aerodynamics(
     # Shape: [num_envs, num_propellers, 3]
     thrust_world = quat_rotate(propeller_quat_w, thrust_local)
     
-    # Calculate drag torque: τ = -k_d * sign(ω) * ω²
-    # Drag opposes rotation
-    drag_torque_magnitude = drag_coefficient * torch.square(propeller_vel)
-    drag_torque_magnitude = -torch.sign(propeller_vel) * drag_torque_magnitude
-    
-    # Drag torque is around the rotation axis (Z-axis for DoubleBee)
-    # Shape: [num_envs, num_propellers, 3]
-    drag_torque_local = torch.zeros(env.num_envs, len(propeller_joint_ids), 3, device=robot.device)
-    drag_torque_local[:, :, 2] = drag_torque_magnitude  # Z-axis torque
-    
-    # Rotate drag torque to world frame
-    drag_torque_world = quat_rotate(propeller_quat_w, drag_torque_local)
-    
-    # Prepare force and torque tensors for all bodies
+    # Prepare force tensors for all bodies
     # Shape: [num_envs, num_bodies, 3]
     num_bodies = robot.num_bodies
     external_forces = torch.zeros(env.num_envs, num_bodies, 3, device=robot.device)
-    external_torques = torch.zeros(env.num_envs, num_bodies, 3, device=robot.device)
+    external_torques = torch.zeros(env.num_envs, num_bodies, 3, device=robot.device)  # Zero torques (no drag)
     
-    # Assign propeller thrust forces and drag torques
+    # Assign propeller thrust forces
     for i, body_id in enumerate(propeller_body_ids):
         external_forces[:, body_id, :] = thrust_world[:, i, :]
-        external_torques[:, body_id, :] = drag_torque_world[:, i, :]
     
-    # Apply external forces and torques to the robot
-    # Following the quadcopter example's approach
+    # Apply external forces to the robot (with zero torques)
     robot.set_external_force_and_torque(
         external_forces, 
-        external_torques,
+        external_torques,  # Zero torques - no drag applied
         body_ids=None  # Apply to all bodies (forces are zero except for propellers)
     )
 
     # Optional: visualize thrust vectors in the viewport
     if visualize:
+        print(f"[AERO VIZ] Attempting to visualize thrust arrows...", flush=True)
         try:
             # Lazy-acquire debug draw interface once
             if not hasattr(apply_propeller_aerodynamics, "_dbg_draw"):
-                from omni.isaac.debug_draw import _debug_draw
-                apply_propeller_aerodynamics._dbg_draw = _debug_draw.acquire_debug_draw_interface()
+                try:
+                    # Try new API first (Isaac Sim 2023+)
+                    from omni.isaac.debug_draw import _debug_draw
+                    apply_propeller_aerodynamics._dbg_draw = _debug_draw.acquire_debug_draw_interface()
+                except (ImportError, ModuleNotFoundError):
+                    try:
+                        # Try alternative import path
+                        import omni.isaac.debug_draw as debug_draw
+                        apply_propeller_aerodynamics._dbg_draw = debug_draw._debug_draw.acquire_debug_draw_interface()
+                    except (ImportError, ModuleNotFoundError, AttributeError):
+                        # Fallback to direct carb debug draw
+                        import carb
+                        apply_propeller_aerodynamics._dbg_draw = carb.plugins.acquire_interface("omni.isaac.debug_draw.DebugDrawInterface")
+                
+                if apply_propeller_aerodynamics._dbg_draw is None:
+                    print(f"[AERO VIZ] Could not acquire debug draw interface - visualization disabled", flush=True)
+                    return
+                
+                print(f"[AERO VIZ] Debug draw interface acquired successfully", flush=True)
+            
             dbg = apply_propeller_aerodynamics._dbg_draw
 
             # Use first environment for visualization to avoid clutter
@@ -195,9 +221,28 @@ def apply_propeller_aerodynamics(
                         thickness=3.0,
                         duration=0.2,
                     )
-        except Exception:
-            # Swallow visualization errors silently (e.g., headless mode)
-            pass
+                print(f"[AERO VIZ] Drew arrow from {start} to {end}, magnitude={torch.norm(prop_force_w[i]).item():.2f}N", flush=True)
+        except Exception as e:
+            # If debug draw fails, try using Isaac Lab's visualization markers
+            print(f"[AERO VIZ] Debug draw visualization failed: {e}", flush=True)
+            print(f"[AERO VIZ] Attempting fallback visualization using scene markers...", flush=True)
+            try:
+                # Fallback: Use Isaac Lab's built-in visualization
+                # This prints to console instead of drawing in viewport
+                env_id = 0
+                prop_pos_w = robot.data.body_pos_w[env_id, propeller_body_ids, :]
+                prop_force_w = thrust_world[env_id]
+                
+                print(f"[AERO VIZ FALLBACK] Env {env_id} thrust visualization:", flush=True)
+                for i in range(prop_force_w.shape[0]):
+                    pos = prop_pos_w[i].cpu().numpy()
+                    force = prop_force_w[i].cpu().numpy()
+                    magnitude = torch.norm(prop_force_w[i]).item()
+                    direction = force / (magnitude + 1e-6)
+                    print(f"[AERO VIZ FALLBACK]   Propeller {i}: pos={pos}, force={force}, mag={magnitude:.2f}N, dir={direction}", flush=True)
+                
+            except Exception as e2:
+                print(f"[AERO VIZ] Fallback visualization also failed: {e2}", flush=True)
     # robot.set_external_force_and_torque(
     #     torch.zeros_like(external_forces), 
     #     torch.zeros_like(external_torques),

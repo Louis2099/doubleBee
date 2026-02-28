@@ -177,16 +177,18 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
             A tuple containing the observations, rewards, resets (terminated and truncated) and extras.
         """
         # NOTE: process actions
-        # Duplicate left servo action to right servo (action[2] -> action[3])
-        # This makes both servos use the same policy output, but with opposite signs via scales
-        # Duplicate left propeller action to right propeller (action[4] -> action[4] at action[5])
-        # This makes both propellers use the same magnitude, opposite signs handled by scales
-        # Action space remains 6D, but action[3] and action[5] are ignored and replaced
-        action = action.clone()  # Clone to avoid modifying the original tensor
-        if action.shape[-1] >= 4:  # Ensure we have at least 4 actions (servos are at indices 2 and 3)
-            action[..., 3] = action[..., 2]  # Duplicate left servo action to right servo
-        if action.shape[-1] >= 6:  # Ensure we have propeller actions (at indices 4 and 5)
-            action[..., 5] = action[..., 4]  # Duplicate left propeller action to right propeller
+        # For 6D action space: duplicate left servo/propeller to right with same value (opposite signs via scales)
+        # For 4D action space: action manager already handles both joints directly
+        # Clone to avoid modifying the original tensor
+        action = action.clone()
+        
+        if action.shape[-1] == 6:
+            # 6D action space: apply constraints for backward compatibility
+            if action.shape[-1] >= 4:  # Ensure we have at least 4 actions (servos at indices 2 and 3)
+                action[..., 3] = action[..., 2]  # Duplicate left servo action to right servo
+            if action.shape[-1] >= 6:  # Ensure we have propeller actions (at indices 4 and 5)
+                action[..., 5] = action[..., 4]  # Duplicate left propeller action to right propeller
+        # else: 4D action space - no duplication needed, action manager handles both joints
         
         # print(f"[INTERNAL CHECK] Action passed to the env.step(): {action}", flush=True)
         self.action_manager.process_action(action.to(self.device))

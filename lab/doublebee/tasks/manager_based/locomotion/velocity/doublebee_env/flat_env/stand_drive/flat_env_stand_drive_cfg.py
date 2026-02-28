@@ -69,9 +69,8 @@ class DoubleBeeEventsCfg:
         params={
             "propeller_joint_names": ("leftPropeller", "rightPropeller"),
             "propeller_body_names": ("leftPropeller", "rightPropeller"),
-            "thrust_coefficient": 1e-4,  # Increased for testing! (was 0.1)
-            "drag_coefficient": 1e-5,
-            "max_thrust_per_propeller": 500.0,  # Increased max thrust
+            "thrust_coefficient": 1e-4,  # Kept for compatibility (unused in PWM model)
+            "max_thrust_per_propeller": 500.0,  # Maximum thrust per propeller
             "visualize": True,
             "visualize_scale": 0.05,
             # asset_cfg defaults to SceneEntityCfg("robot")
@@ -131,9 +130,8 @@ class DoubleBeeEventsCfg_PLAY:
         params={
             "propeller_joint_names": ("leftPropeller", "rightPropeller"),
             "propeller_body_names": ("leftPropeller", "rightPropeller"),
-            "thrust_coefficient": 1e-4,  # Increased for testing! (was 0.1)
-            "drag_coefficient": 1e-5,
-            "max_thrust_per_propeller": 500.0,  # Increased max thrust
+            "thrust_coefficient": 1e-4,  # Kept for compatibility (unused in PWM model)
+            "max_thrust_per_propeller": 500.0,  # Maximum thrust per propeller
             "visualize": True,
             "visualize_scale": 0.05,
             # asset_cfg defaults to SceneEntityCfg("robot")

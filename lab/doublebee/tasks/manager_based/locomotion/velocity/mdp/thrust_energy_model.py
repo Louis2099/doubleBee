@@ -168,6 +168,7 @@ if __name__ == "__main__":
     # Thrust model
     # predict_fn, name, rmse_val = PWM2Thrust_regression(target="thrust")
     # print(f"Example: PWM 1500 -> Thrust = {predict_fn(1500):.2f} N")
+    # print(f"pwm_to_thrust(900) = {pwm_to_thrust(900, target='thrust'):.2f} N")
     print(f"pwm_to_thrust(1500) = {pwm_to_thrust(1500, target='thrust'):.2f} N")
     
     

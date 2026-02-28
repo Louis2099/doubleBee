@@ -19,6 +19,7 @@ from isaaclab.utils import configclass
 from lab.doublebee.assets.doublebee import DOUBLEBEE_CFG
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import (
     ActionsCfg as DoubleBeeActionsCfg,
+    ActionsCfg4D as DoubleBeeActionsCfg4D,
     CurriculumCfg as DoubleBeeCurriculumCfg,
     ObservationsCfg as DoubleBeeObservationsCfg,
     RewardsCfg as DoubleBeeRewardsCfg,
@@ -85,7 +86,7 @@ class DoubleBeeVelocityEnvCfg(ManagerBasedConstraintRLEnvCfg):
             attach_yaw_only=True,  # Only follow yaw rotation, not roll/pitch
             pattern_cfg=patterns.GridPatternCfg(
                 resolution=0.07,  # 7cm spacing between rays
-                size=[0.35, 0.35]  # 35cm x 35cm square → 6x6 grid (36 rays)
+                size=[0.21, 0.21]  # 21cm x 21cm square → 4x4 grid (16 rays)
             ),
             debug_vis=False,  # Disable visualization to avoid headless mode issues
             mesh_prim_paths=["/World/ground"],  # Raycast against terrain

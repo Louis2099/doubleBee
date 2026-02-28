@@ -10,7 +10,7 @@ import isaaclab.envs.mdp as mdp
 from isaaclab.utils import configclass
 
 # ±45° in rad, for servo position scale so that policy [-1, 1] → [-45°, 45°]
-SERVO_POS_LIMIT_RAD = math.pi / 4  # 0.785 rad
+SERVO_POS_LIMIT_RAD = math.pi / 2  # 1.57 rad
 
 
 @configclass
@@ -63,7 +63,7 @@ class ActionsCfg:
         joint_names=["leftPropeller"],
         # scale=500.0,
         # scale=300.0, # for speed based thrust model
-        scale = 100.0, # for PWM based thrust model, the actual scale is 2000, 10 is multiplied in aerodynamics.py to prevent large rotational forces
+        scale = 500.0, # for PWM based thrust model, the actual scale is 2000, 10 is multiplied in aerodynamics.py to prevent large rotational forces
         # scale=6.0,
         use_default_offset=False,
         preserve_order=True,
@@ -74,7 +74,58 @@ class ActionsCfg:
         #scale=-500.0,  # Negative scale to invert for gyroscopic balance
         # scale=-6.0,
         # scale=-300.0, # for speed based thrust model
-        scale=-100.0, # for PWM based thrust model
+        scale=-500.0, # for PWM based thrust model
+        use_default_offset=False,
+        preserve_order=True,
+    )
+
+
+@configclass
+class ActionsCfg4D:
+    """Reduced 4D action space for DoubleBee robot.
+    
+    This config eliminates redundant outputs by having only one action for servos
+    and one for propellers. The environment will duplicate these with opposite signs.
+    
+    Action mapping:
+    - [0]: left wheel velocity
+    - [1]: right wheel velocity (negative scale)
+    - [2]: servo position (duplicated to both servos with opposite signs)
+    - [3]: propeller velocity (duplicated to both propellers with opposite signs)
+    """
+
+    # Wheel velocity actions (still separate for differential drive)
+    wheel_vel_left = mdp.JointVelocityActionCfg(
+        asset_name="robot",
+        joint_names=["leftWheel"],
+        scale=500.0,
+        use_default_offset=False,
+        preserve_order=True,
+    )
+    wheel_vel_right = mdp.JointVelocityActionCfg(
+        asset_name="robot",
+        joint_names=["rightWheel"],
+        scale=-500.0,  # Negative scale for opposite rotation
+        use_default_offset=False,
+        preserve_order=True,
+    )
+
+    # Single servo action (will be duplicated to left/right with opposite signs)
+    # Using dict to specify different scales for each joint
+    propeller_servo_pos = mdp.JointPositionActionCfg(
+        asset_name="robot",
+        joint_names=["leftPropellerServo", "rightPropellerServo"],
+        scale={"leftPropellerServo": SERVO_POS_LIMIT_RAD, "rightPropellerServo": -SERVO_POS_LIMIT_RAD},
+        use_default_offset=False,
+        preserve_order=True,
+    )
+
+    # Single propeller action (will be duplicated to left/right with opposite signs)
+    # Using dict to specify different scales for each joint
+    propeller_vel = mdp.JointVelocityActionCfg(
+        asset_name="robot",
+        joint_names=["leftPropeller", "rightPropeller"],
+        scale={"leftPropeller": 500.0, "rightPropeller": -500.0},
         use_default_offset=False,
         preserve_order=True,
     )
@@ -92,6 +143,13 @@ class ActionsCfgWheelsServosOnly(ActionsCfg):
 
 
 @configclass
+class ActionsCfgWheelsServosOnly4D(ActionsCfg4D):
+    """4D action config with only wheels and propeller servos (no propeller velocity)."""
+
+    propeller_vel = None
+
+
+@configclass
 class ActionsCfgWheelsOnly(ActionsCfg):
     """Action config with only wheel velocity (no servos, no propeller velocity).
 
@@ -103,3 +161,11 @@ class ActionsCfgWheelsOnly(ActionsCfg):
     propeller_servo_pos_right = None
     propeller_vel_left = None
     propeller_vel_right = None
+
+
+@configclass
+class ActionsCfgWheelsOnly4D(ActionsCfg4D):
+    """4D action config with only wheels (no servos, no propeller velocity)."""
+
+    propeller_servo_pos = None
+    propeller_vel = None

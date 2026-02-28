@@ -247,7 +247,7 @@ def penalize_propeller_efficiency(env) -> torch.Tensor:
         raw_penalty_magnitude = torch.sum(torch.square(propeller_velocities), dim=1)  # [num_envs]
         
         # Scale to [-1, 0] using e^(-x) - 1 transformation
-        scaled_penalty = torch.exp(-raw_penalty_magnitude) - 1.0  # [num_envs]
+        scaled_penalty = torch.exp(-raw_penalty_magnitude/500) - 1.0  # [num_envs]
         
         return scaled_penalty
     except (ValueError, IndexError):
@@ -291,10 +291,10 @@ def penalize_facing_direction_mismatch(env) -> torch.Tensor:
     return angle_error_magnitude
 
 
-def penalize_angular_velocity(env) -> torch.Tensor:
-    """Penalty for excessive angular velocity to discourage spinning and unwanted rotations.
+def penalize_tilt_angle(env) -> torch.Tensor:
+    """Penalty for excessive tilt angle (roll/pitch) to keep robot upright.
     
-    Computes a penalty based on weighted sum of roll, pitch, and yaw angular velocities.
+    Penalizes deviation from upright orientation. Uses projected gravity to measure tilt.
     Scales the penalty to [-1, 0] range using e^(-x) - 1 transformation.
     
     Args:
@@ -302,36 +302,71 @@ def penalize_angular_velocity(env) -> torch.Tensor:
         
     Returns:
         torch.Tensor: Scaled penalty per environment [num_envs] in range [-1, 0]
-        - Values closer to -1 for higher angular velocities
-        - Values closer to 0 for low/no rotation
+        - Values closer to -1 for large tilt angles
+        - Values closer to 0 when robot is upright
     """
     robot = env.scene["robot"]
     
-    # Get angular velocity in body frame [num_envs, 3] - (roll, pitch, yaw)
-    ang_vel = robot.data.root_ang_vel_b  # [num_envs, 3]
+    # Get projected gravity in body frame [num_envs, 3]
+    # Projected gravity = rotation_matrix^T * [0, 0, -1]
+    # When robot is perfectly upright: projected_gravity = [0, 0, -1]
+    # When tilted, X and Y components are non-zero
+    projected_gravity = robot.data.projected_gravity_b  # [num_envs, 3]
     
-    # Extract individual components (using absolute values)
-    #NOTE: the forward axis is Y for this robot
-    ang_vel_pitch = torch.abs(ang_vel[:, 0])   # [num_envs] - roll (x-axis)
-    ang_vel_roll = torch.abs(ang_vel[:, 1]) # [num_envs] - pitch (y-axis)
-    ang_vel_yaw = torch.abs(ang_vel[:, 2])    # [num_envs] - yaw (z-axis)
+    # Extract tilt components (X and Y components indicate roll/pitch)
+    # Z component indicates how upright the robot is
+    tilt_x = torch.abs(projected_gravity[:, 0])  # [num_envs] - related to pitch
+    tilt_y = torch.abs(projected_gravity[:, 1])  # [num_envs] - related to roll
     
     # Weights for each component (can be adjusted based on importance)
-    # Yaw is typically most important for spinning, but all rotations should be penalized
-    weight_roll = 5.0
-    weight_pitch = 3.0
-    weight_yaw = 2.0
+    # Both roll and pitch are important for stability
+    weight_x = 4.0  # Pitch-like tilt
+    weight_y = 6.0  # Roll-like tilt
     
-    # Compute weighted sum of squared angular velocities
-    # Using squared values to strongly penalize high rotation rates
+    # Compute weighted sum of squared tilt components
+    # Using squared values to strongly penalize large tilts
     weighted_sum = (
-        weight_roll * (ang_vel_roll ** 2) +
-        weight_pitch * (ang_vel_pitch ** 2) +
-        weight_yaw * (ang_vel_yaw ** 2)
+        weight_x * torch.sqrt(tilt_x) +
+        weight_y * torch.sqrt(tilt_y)
     )  # [num_envs]
     
     # Scale to [-1, 0] using e^(-x) - 1 transformation
     scaled_penalty = torch.exp(-weighted_sum) - 1.0  # [num_envs]
+    
+    return scaled_penalty
+
+
+def penalize_excessive_linear_speed(env, speed_threshold: float = 3.0) -> torch.Tensor:
+    """Penalty for excessive linear speed above a threshold.
+    
+    This prevents the robot from moving dangerously fast. Penalty is only active
+    when speed exceeds the threshold, and increases quadratically with excess speed.
+    
+    Args:
+        env: The environment instance
+        speed_threshold: Speed threshold in m/s above which penalty is applied (default 3.0 m/s)
+        
+    Returns:
+        torch.Tensor: Scaled penalty per environment [num_envs] in range [-1, 0]
+        - 0 when speed <= threshold
+        - Increasingly negative as speed exceeds threshold
+    """
+    robot = env.scene["robot"]
+    
+    # Get linear velocity in world frame [num_envs, 3]
+    lin_vel = robot.data.root_lin_vel_w  # [num_envs, 3]
+    
+    # Compute speed magnitude (3D Euclidean norm)
+    speed = torch.norm(lin_vel, dim=1)  # [num_envs]
+    
+    # Compute excess speed (only positive when above threshold)
+    excess_speed = torch.clamp(speed - speed_threshold, min=0.0)  # [num_envs]
+    
+    # Quadratic penalty on excess speed, scaled to [-1, 0]
+    # Using e^(-x) - 1 for consistency with other penalties
+    # Scale factor makes penalty reach ~-0.63 at 1 m/s excess, ~-0.95 at 3 m/s excess
+    penalty_magnitude = (excess_speed ** 2)  # [num_envs]
+    scaled_penalty = torch.exp(-penalty_magnitude) - 1.0  # [num_envs]
     
     return scaled_penalty
 
@@ -441,7 +476,7 @@ class RewardsCfg:
     
     velocity_direction_alignment = RewTerm(
         func=velocity_direction_alignment,
-        weight=0.25,
+        weight=0.2,
     )
     """Reward for aligning robot's XY velocity direction with command's XY velocity direction.
     Uses cosine similarity: reward = dot(normalize(v_robot_xy), normalize(v_cmd_xy)).
@@ -459,10 +494,10 @@ class RewardsCfg:
 
     #========== Efficiency Rewards ==========
     
-    # propeller_efficiency = RewTerm(
-    #     func=penalize_propeller_efficiency,
-    #     weight=0.005,
-    # )
+    propeller_efficiency = RewTerm(
+        func=penalize_propeller_efficiency,
+        weight=0.1,
+    )
     """Penalty for excessive propeller speeds to encourage efficiency.
     Computes penalty based on propeller joint velocities, scaled to [-1, 0] using e^(-x) - 1.
     Since thrust ∝ ω², high speeds are inefficient."""
@@ -479,20 +514,28 @@ class RewardsCfg:
     
     penalize_facing_mismatch = RewTerm(
         func=penalize_facing_direction_mismatch,
-        weight=0.03,
+        weight=0.3,
     )
     """Penalty for mismatch between robot facing direction and target direction.
     Reads angle error directly from vel_command_b[:, 2] (normalized angle error in [-1, 1]).
     Penalizes when robot is not facing the target, scaled to [-1, 0] using e^(-x) - 1."""
     
     penalize_rotation = RewTerm(
-        func=penalize_angular_velocity,
-        weight=0.05,
+        func=penalize_tilt_angle,
+        weight=0.3,
     )
-    """Penalty for excessive angular velocity to discourage spinning.
-    Computes penalty based on squared angular velocity magnitude, with emphasis on yaw rotation.
-    Strongly penalizes high rotation rates to encourage stable, controlled movement."""
+    """Penalty for excessive tilt angle (roll/pitch deviation from upright).
+    Uses projected gravity to measure tilt. Strongly penalizes large roll/pitch angles
+    to encourage upright, stable posture."""
+    
+    penalize_high_speed = RewTerm(
+        func=penalize_excessive_linear_speed,
+        weight=0.1,
+    )
+    """Penalty for excessive linear speed above 3 m/s threshold.
+    Prevents dangerous high-speed movement. Only active when speed exceeds threshold."""
 
+    
     
     
     # ========== Terminal Rewards ==========

@@ -1069,7 +1069,8 @@ def hover_test(env, num_steps: int) -> None:
         prop_action_value = omega / prop_scale
 
         # Clamp to [-1, 1] to respect typical normalized bounds
-        prop_action_value = max(-1.0, min(1.0, prop_action_value))
+        #prop_action_value = max(-1.0, min(1.0, prop_action_value))
+        prop_action_value = 1.0
 
         # Assign opposite signs to the two propellers for gyroscopic balance
         # action[:, prop_slice] selects the propeller columns (shape: [num_envs, 2])
@@ -1101,7 +1102,11 @@ def hover_test(env, num_steps: int) -> None:
             print(f"[HOVER] act_tensor.shape={tuple(act_tensor.shape)} device={act_tensor.device}", flush=True)
             print(f"[HOVER] Full action tensor [env 0]: {act_tensor[0].cpu().numpy()}", flush=True)
             
-            # Check servo slice specifically
+            # Check ALL action slices
+            if wheel_slice.stop > wheel_slice.start:
+                wheel_actions = act_tensor[0, wheel_slice].cpu().numpy()
+                print(f"[HOVER] Wheel actions (indices {wheel_slice}): {wheel_actions}", flush=True)
+            
             if servo_slice.stop > servo_slice.start:
                 servo_actions = act_tensor[0, servo_slice].cpu().numpy()
                 print(f"[HOVER] Servo actions (indices {servo_slice}): {servo_actions}", flush=True)
@@ -1111,13 +1116,10 @@ def hover_test(env, num_steps: int) -> None:
             else:
                 print(f"[HOVER] Servo slice is empty: {servo_slice}", flush=True)
             
-            # Check wheel and prop actions too for context
-            if wheel_slice.stop > wheel_slice.start:
-                wheel_actions = act_tensor[0, wheel_slice].cpu().numpy()
-                print(f"[HOVER] Wheel actions (indices {wheel_slice}): {wheel_actions}", flush=True)
             if prop_slice.stop > prop_slice.start:
                 prop_actions = act_tensor[0, prop_slice].cpu().numpy()
                 print(f"[HOVER] Propeller actions (indices {prop_slice}): {prop_actions}", flush=True)
+                print(f"[HOVER] ⚠️  CRITICAL: Are prop actions the SAME? Left={prop_actions[0]:.6f}, Right={prop_actions[1]:.6f}, Diff={abs(prop_actions[0]-prop_actions[1]):.6f}", flush=True)
             
             try:
                 if hasattr(env.unwrapped, 'action_manager'):
