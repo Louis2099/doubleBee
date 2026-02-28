@@ -422,6 +422,15 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
         # -- command manager
         info = self.command_manager.reset(env_ids)
         self.extras["log"].update(info)
+        
+        # CRITICAL: Apply aligned targets AFTER command manager reset
+        # If using aligned initialization (DoubleBeeEventsCfg_PLAY), the event manager
+        # stored aligned targets in a buffer during event reset. We must apply them here
+        # to override the random targets sampled by command_manager.reset().
+        if hasattr(self, "_aligned_targets_buffer"):
+            from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import events as mdp_events
+            mdp_events.apply_aligned_targets_to_command_manager(self, env_ids)
+        
         # -- event manager
         info = self.event_manager.reset(env_ids)
         self.extras["log"].update(info)

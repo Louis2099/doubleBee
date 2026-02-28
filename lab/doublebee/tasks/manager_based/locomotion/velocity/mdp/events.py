@@ -26,7 +26,7 @@ from isaaclab.actuators import ImplicitActuator
 from isaaclab.assets import Articulation, DeformableObject, RigidObject
 from isaaclab.managers import EventTermCfg, ManagerTermBase, SceneEntityCfg
 from isaaclab.terrains import TerrainImporter
-
+import math
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
 
@@ -742,15 +742,13 @@ def reset_root_state_from_terrain_aligned(
         # Add height offset to target (for visualization)
         target_pos_world[2] += 0.3
         
-        # Store the aligned target position in the command manager if available
-        # This will be used by TerrainTargetDirectionCommand
-        # NOTE: This is set AFTER command manager resamples, so it will overwrite any random target
-        if hasattr(env, "command_manager") and hasattr(env.command_manager, "_terms"):
-            if "base_velocity" in env.command_manager._terms:
-                velocity_cmd = env.command_manager._terms["base_velocity"]
-                if hasattr(velocity_cmd, "current_targets_w"):
-                    # Set the aligned target (this happens after command manager resamples)
-                    velocity_cmd.current_targets_w[env_idx, :] = target_pos_world
+        # Store the aligned target position for later application
+        # CRITICAL: We cannot set the target here because command_manager.reset() hasn't run yet.
+        # Command manager reset happens AFTER event manager reset in _reset_idx().
+        # So we store aligned targets in a temporary buffer on the environment.
+        if not hasattr(env, "_aligned_targets_buffer"):
+            env._aligned_targets_buffer = torch.zeros(env.num_envs, 3, device=env.device)
+        env._aligned_targets_buffer[env_idx, :] = target_pos_world
         
         # Set robot position
         robot_height_offset = 0.30
@@ -766,7 +764,12 @@ def reset_root_state_from_terrain_aligned(
         # NOTE: DoubleBee robot faces along +Y axis in body frame (not +X)
         # atan2(x, y) gives angle from +Y axis to vector [x, y]
         # This is the correct yaw angle for a robot that faces +Y
-        yaw = torch.atan2(direction_xy[0], direction_xy[1])  # Angle from +Y axis in XY plane
+        # yaw = torch.atan2(direction_xy[0], direction_xy[1])  # Angle from +Y axis in XY plane
+        yaw = torch.tensor(0, device=env.device)
+        # yaw = torch.atan2(direction_xy[1], direction_xy[0])
+
+
+
         # Add small random yaw noise (rad). e.g. ±0.15 rad ≈ ±8.6°
         yaw_noise_range = pose_range.get("yaw_noise", (0.0, 0.0))
         yaw_noise = math_utils.sample_uniform(
@@ -777,8 +780,9 @@ def reset_root_state_from_terrain_aligned(
         yaw = yaw + yaw_noise
 
         # Sample roll and pitch from pose_range (if provided)
+        # For perfect upright alignment, set both to (0.0, 0.0) in config
         roll_range = pose_range.get("roll", (0.0, 0.0))
-        pitch_range = pose_range.get("pitch", (-0.1, 0.1)) # small pitch randomization to prevent robot from tipping over
+        pitch_range = pose_range.get("pitch", (0.0, 0.0))
         roll = math_utils.sample_uniform(
             torch.tensor(roll_range[0], device=env.device),
             torch.tensor(roll_range[1], device=env.device),
@@ -794,6 +798,7 @@ def reset_root_state_from_terrain_aligned(
         orientations[i, :] = math_utils.quat_from_euler_xyz(roll, pitch, yaw)
     
     # Sample initial velocities from velocity_range (keys: x, y, z m/s; roll, pitch, yaw rad/s)
+    
     range_list = [velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
     ranges = torch.tensor(range_list, device=asset.device)
     vel_samples = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=asset.device)
@@ -803,6 +808,37 @@ def reset_root_state_from_terrain_aligned(
     asset.write_root_link_pose_to_sim(torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
     asset.write_root_com_velocity_to_sim(velocities, env_ids=env_ids)
 
+
+def apply_aligned_targets_to_command_manager(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """Apply aligned targets stored in buffer to command manager.
+    
+    This function must be called AFTER command_manager.reset() to ensure the aligned
+    targets override any random targets sampled during command reset.
+    
+    This is designed to work with reset_root_state_from_terrain_aligned(), which stores
+    aligned targets in env._aligned_targets_buffer during event reset.
+    
+    Args:
+        env: The environment instance.
+        env_ids: Environment indices to apply targets for.
+        asset_cfg: Configuration for the asset (unused, for API compatibility).
+    """
+    # Check if aligned targets buffer exists
+    if not hasattr(env, "_aligned_targets_buffer"):
+        return  # No aligned targets to apply
+    
+    # Apply aligned targets to command manager
+    if hasattr(env, "command_manager") and hasattr(env.command_manager, "_terms"):
+        if "base_velocity" in env.command_manager._terms:
+            velocity_cmd = env.command_manager._terms["base_velocity"]
+            if hasattr(velocity_cmd, "current_targets_w"):
+                # Apply the aligned targets that were stored during event reset
+                for env_idx in env_ids:
+                    velocity_cmd.current_targets_w[env_idx, :] = env._aligned_targets_buffer[env_idx, :]
 
 
 def reset_joints_by_scale(

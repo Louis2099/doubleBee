@@ -156,14 +156,17 @@ class DoubleBeeEventsCfg_PLAY:
         mode="reset",
         params={
             "pose_range": {
-                "roll": (0.0, 0.0),   # No roll randomization
-                "pitch": (0.0, 0.0),  # No pitch randomization
-                # yaw is computed automatically to face target
+                "roll": (0.0, 0.0),       # No roll randomization - perfectly upright
+                "pitch": (0.0, 0.0),      # No pitch randomization - perfectly level
+                "yaw_noise": (0.0, 0.0),  # No yaw noise - perfect alignment toward target
             },
             "velocity_range": {
-                "x": (0.0, 0.0),  # Initialize with zero velocity
-                "y": (0.0, 0.0),
-                "z": (0.0, 0.0),
+                "x": (0.0, 0.0),      # No initial linear velocity in X
+                "y": (0.0, 0.0),      # No initial linear velocity in Y
+                "z": (0.0, 0.0),      # No initial linear velocity in Z
+                "roll": (0.0, 0.0),   # No initial angular velocity around X (roll rate)
+                "pitch": (0.0, 0.0),  # No initial angular velocity around Y (pitch rate)
+                "yaw": (0.0, 0.0),    # No initial angular velocity around Z (yaw rate - NOT SPINNING)
             },
             "align_axis": "x",  # Align on X axis (robot moves along Y axis)
         },
