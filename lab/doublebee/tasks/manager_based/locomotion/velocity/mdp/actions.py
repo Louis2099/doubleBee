@@ -91,7 +91,7 @@ class ActionsCfg4D:
     - [0]: left wheel velocity
     - [1]: right wheel velocity (negative scale)
     - [2]: servo position (duplicated to both servos with opposite signs)
-    - [3]: propeller velocity (duplicated to both propellers with opposite signs)
+    - [3]: propeller: [-1,1] -> [0,1] -> left [0,500] rad/s, right [0,-500] rad/s -> PWM 1000-2000 -> thrust
     """
 
     # Wheel velocity actions (still separate for differential drive)
@@ -121,11 +121,13 @@ class ActionsCfg4D:
     )
 
     # Single propeller action (will be duplicated to left/right with opposite signs)
-    # Using dict to specify different scales for each joint
+    # Mapping: policy [-1,1] -> [0,1] -> left [0,500] rad/s, right [0,-500] rad/s
+    # processed = offset + scale*action => left: 250*(action+1), right: -250*(action+1)
     propeller_vel = mdp.JointVelocityActionCfg(
         asset_name="robot",
         joint_names=["leftPropeller", "rightPropeller"],
-        scale={"leftPropeller": 500.0, "rightPropeller": -500.0},
+        scale={"leftPropeller": 250.0, "rightPropeller": -250.0},
+        offset={"leftPropeller": 250.0, "rightPropeller": -250.0},
         use_default_offset=False,
         preserve_order=True,
     )

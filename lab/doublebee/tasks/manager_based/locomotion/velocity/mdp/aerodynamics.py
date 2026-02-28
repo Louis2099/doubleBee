@@ -102,19 +102,16 @@ def apply_propeller_aerodynamics(
     #     print(f"  Left propeller vel: {propeller_vel[0, 0].item():.2f}, Right propeller vel: {propeller_vel[0, 1].item():.2f}")
     
     """
-    NOTE:
-    Thrust calculation (from PWM signal):
-    propeller_vel is the PWM signal here. pwm_to_thrust returns numpy; convert to tensor.
+    Thrust calculation: rotation speed (rad/s) -> PWM [1000, 2000] -> polynomial thrust.
+    |rotation speed| maps linearly: 0 rad/s -> 1000, 500 rad/s -> 2000.
     """
-    pwm_np = propeller_vel.cpu().numpy()
-    pwm_np *= 3.25 # scale up to 2000
-    
-    
-    # Debug: Show PWM values before thrust calculation
-    # if apply_propeller_aerodynamics._vel_debug_counter <= 10:
-    #     print(f"  PWM values: {pwm_np[0]}")
-    
-    thrust_np = pwm_to_thrust(abs(pwm_np), target="thrust")
+    # Map |omega| (rad/s) to PWM: pwm = 1000 + (|omega| / 500) * 1000, clamped to [1000, 2000]
+    abs_omega = propeller_vel.abs()
+    pwm = 1000.0 + (abs_omega / 500.0) * 1000.0
+    pwm = torch.clamp(pwm, min=1000.0, max=2000.0)
+    pwm_np = pwm.cpu().numpy()
+
+    thrust_np = pwm_to_thrust(pwm_np, target="thrust")
     
     # Debug: Show thrust output
     # if apply_propeller_aerodynamics._vel_debug_counter <= 10:
