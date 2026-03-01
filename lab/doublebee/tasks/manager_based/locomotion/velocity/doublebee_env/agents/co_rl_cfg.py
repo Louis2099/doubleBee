@@ -48,7 +48,7 @@ class DoubleBeeCoRlCfg(CoRlPolicyRunnerCfg):
 
     # Training settings
     max_iterations: int = 5000
-    save_interval: int = 500
+    save_interval: int = 100
     log_interval: int = 1000
     eval_interval: int = 100
     num_eval_episodes: int = 10

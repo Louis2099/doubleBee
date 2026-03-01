@@ -120,6 +120,13 @@ class CoRlVecEnvWrapper(VecEnv):
             self.critic_state_handler = None
             self.num_privileged_obs = 0
 
+        # Observation latency buffer: delays policy obs by N steps.
+        # Critic always sees the current obs (asymmetric actor-critic).
+        self.obs_latency_steps = agent_cfg.obs_latency_steps
+        self._prev_policy_obs: torch.Tensor | None = None
+        if self.obs_latency_steps > 0:
+            print(f"[INFO] Observation latency enabled: policy sees obs delayed by {self.obs_latency_steps} step(s)")
+
         # reset at the start since the RSL-RL runner does not call reset
         self.env.reset()
 
@@ -191,6 +198,10 @@ class CoRlVecEnvWrapper(VecEnv):
             # Use standard policy observations without stacking (DoubleBee-style)
             policy_obs = obs_dict["policy"]
 
+        # Seed the latency buffer (first call — no delay yet)
+        if self.obs_latency_steps > 0 and self._prev_policy_obs is None:
+            self._prev_policy_obs = policy_obs.clone()
+
         # Critic observations
         if self.critic_state_handler is not None:
             # Use state handler for stacking (Flamingo-style)
@@ -238,6 +249,10 @@ class CoRlVecEnvWrapper(VecEnv):
             # Use standard policy observations (DoubleBee-style)
             policy_obs = obs_dict["policy"]
 
+        # Seed latency buffer with initial obs (no delay on first step after reset)
+        if self.obs_latency_steps > 0:
+            self._prev_policy_obs = policy_obs.clone()
+
         # Critic observations reset
         if self.critic_state_handler is not None:
             # Use state handler for stacking (Flamingo-style)
@@ -268,7 +283,18 @@ class CoRlVecEnvWrapper(VecEnv):
             # Use standard policy observations (DoubleBee-style)
             policy_obs = obs_dict["policy"]
 
-        # Update critic observations
+        # Apply observation latency: policy receives obs from the previous step.
+        # Freshly-reset envs get the current obs (no stale cross-episode data).
+        if self.obs_latency_steps > 0 and self._prev_policy_obs is not None:
+            current_policy_obs = policy_obs
+            delayed_policy_obs = self._prev_policy_obs.clone()
+            # For envs that just reset, use current obs instead of stale previous
+            reset_mask = (dones > 0).unsqueeze(-1)  # (num_envs, 1)
+            policy_obs = torch.where(reset_mask, current_policy_obs, delayed_policy_obs)
+            self._prev_policy_obs = current_policy_obs.clone()
+            obs_dict["policy"] = policy_obs
+
+        # Update critic observations (always current, no latency)
         if self.critic_state_handler is not None:
             # Use state handler for stacking (Flamingo-style)
             critic_obs = self.critic_state_handler.update(

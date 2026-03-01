@@ -46,6 +46,31 @@ _ACTION_THRUST_PRINT_INTERVAL = 500
 # -----------------------------------------------------------------------------
 
 
+def sample_thrust_scale_dr(
+    env: "ManagerBasedEnv",
+    env_ids: torch.Tensor,
+    range_low: float = 0.8,
+    range_high: float = 1.2,
+    num_propellers: int = 2,
+):
+    """Domain randomization: sample per-env, per-propeller thrust scale in [range_low, range_high].
+    
+    Call this from a reset event so each (env, propeller) gets a fixed scale for the episode.
+    apply_propeller_aerodynamics will multiply thrust by env.thrust_scale_dr when present.
+    """
+    if env_ids is None or len(env_ids) == 0:
+        return
+    device = env.device
+    if not hasattr(env, "thrust_scale_dr") or env.thrust_scale_dr is None:
+        env.thrust_scale_dr = torch.ones(
+            env.num_envs, num_propellers, device=device, dtype=torch.float32
+        )
+    scale = range_low + (range_high - range_low) * torch.rand(
+        len(env_ids), num_propellers, device=device, dtype=env.thrust_scale_dr.dtype
+    )
+    env.thrust_scale_dr[env_ids] = scale
+
+
 def _print_action_thrust_chain(env, propeller_vel, pwm, thrust_np):
     """Print policy action -> velocity target -> joint_vel -> PWM -> thrust for env 0 periodically."""
     if not hasattr(_print_action_thrust_chain, "_step_count"):
@@ -179,6 +204,10 @@ def apply_propeller_aerodynamics(
         thrust_np, device=robot.device, dtype=propeller_vel.dtype
     )
 
+    # Domain randomization: ±20% thrust scale per env per propeller (set at reset by sample_thrust_scale_dr)
+    if getattr(env, "thrust_scale_dr", None) is not None:
+        thrust_magnitude = thrust_magnitude * env.thrust_scale_dr
+
     # Calculate thrust force: F = k_t * ω²
     # Using absolute value to always generate positive thrust
     #thrust_magnitude = thrust_coefficient * torch.square(propeller_vel)
@@ -217,86 +246,62 @@ def apply_propeller_aerodynamics(
         body_ids=None  # Apply to all bodies (forces are zero except for propellers)
     )
 
-    # Optional: visualize thrust vectors in the viewport
+    # Optional: visualize thrust vectors in the viewport (disabled by default; carb.plugins not in all Isaac builds)
     if visualize:
-        print(f"[AERO VIZ] Attempting to visualize thrust arrows...", flush=True)
-        try:
-            # Lazy-acquire debug draw interface once
-            if not hasattr(apply_propeller_aerodynamics, "_dbg_draw"):
-                try:
-                    # Try new API first (Isaac Sim 2023+)
-                    from omni.isaac.debug_draw import _debug_draw
-                    apply_propeller_aerodynamics._dbg_draw = _debug_draw.acquire_debug_draw_interface()
-                except (ImportError, ModuleNotFoundError):
-                    try:
-                        # Try alternative import path
-                        import omni.isaac.debug_draw as debug_draw
-                        apply_propeller_aerodynamics._dbg_draw = debug_draw._debug_draw.acquire_debug_draw_interface()
-                    except (ImportError, ModuleNotFoundError, AttributeError):
-                        # Fallback to direct carb debug draw
-                        import carb
-                        apply_propeller_aerodynamics._dbg_draw = carb.plugins.acquire_interface("omni.isaac.debug_draw.DebugDrawInterface")
-                
-                if apply_propeller_aerodynamics._dbg_draw is None:
-                    print(f"[AERO VIZ] Could not acquire debug draw interface - visualization disabled", flush=True)
-                    return
-                
-                print(f"[AERO VIZ] Debug draw interface acquired successfully", flush=True)
-            
-            dbg = apply_propeller_aerodynamics._dbg_draw
-
-            # Use first environment for visualization to avoid clutter
-            env_id = 0
-            # Get body positions (world) for propeller bodies
-            prop_pos_w = robot.data.body_pos_w[env_id, propeller_body_ids, :]  # [2, 3]
-            prop_force_w = thrust_world[env_id]  # [2, 3]
-
-            # Draw an arrow for each propeller
-            for i in range(prop_force_w.shape[0]):
-                start = prop_pos_w[i].cpu().numpy()
-                end = (prop_pos_w[i] + visualize_scale * prop_force_w[i]).cpu().numpy()
-                color = (0.1, 0.9, 0.1, 1.0)  # green
-                # Some Isaac versions expose draw_arrows, others draw_lines; try arrows first
-                if hasattr(dbg, "draw_arrows"):
-                    import numpy as np
-                    dbg.draw_arrows(
-                        starts=np.asarray([start], dtype=np.float32),
-                        ends=np.asarray([end], dtype=np.float32),
-                        colors=np.asarray([color], dtype=np.float32),
-                        arrow_size=3.0,
-                        line_thickness=3.0,
-                        duration=0.2,
-                    )
-                elif hasattr(dbg, "draw_lines"):
-                    import numpy as np
-                    dbg.draw_lines(
-                        points=np.asarray([start, end], dtype=np.float32),
-                        colors=np.asarray([color, color], dtype=np.float32),
-                        thickness=3.0,
-                        duration=0.2,
-                    )
-                print(f"[AERO VIZ] Drew arrow from {start} to {end}, magnitude={torch.norm(prop_force_w[i]).item():.2f}N", flush=True)
-        except Exception as e:
-            # If debug draw fails, try using Isaac Lab's visualization markers
-            print(f"[AERO VIZ] Debug draw visualization failed: {e}", flush=True)
-            print(f"[AERO VIZ] Attempting fallback visualization using scene markers...", flush=True)
+        # Only attempt once; after failure disable to avoid console spam
+        if not getattr(apply_propeller_aerodynamics, "_viz_disabled", False):
             try:
-                # Fallback: Use Isaac Lab's built-in visualization
-                # This prints to console instead of drawing in viewport
-                env_id = 0
-                prop_pos_w = robot.data.body_pos_w[env_id, propeller_body_ids, :]
-                prop_force_w = thrust_world[env_id]
-                
-                print(f"[AERO VIZ FALLBACK] Env {env_id} thrust visualization:", flush=True)
-                for i in range(prop_force_w.shape[0]):
-                    pos = prop_pos_w[i].cpu().numpy()
-                    force = prop_force_w[i].cpu().numpy()
-                    magnitude = torch.norm(prop_force_w[i]).item()
-                    direction = force / (magnitude + 1e-6)
-                    print(f"[AERO VIZ FALLBACK]   Propeller {i}: pos={pos}, force={force}, mag={magnitude:.2f}N, dir={direction}", flush=True)
-                
-            except Exception as e2:
-                print(f"[AERO VIZ] Fallback visualization also failed: {e2}", flush=True)
+                if not hasattr(apply_propeller_aerodynamics, "_dbg_draw"):
+                    try:
+                        from omni.isaac.debug_draw import _debug_draw
+                        apply_propeller_aerodynamics._dbg_draw = _debug_draw.acquire_debug_draw_interface()
+                    except (ImportError, ModuleNotFoundError):
+                        try:
+                            import omni.isaac.debug_draw as debug_draw
+                            apply_propeller_aerodynamics._dbg_draw = debug_draw._debug_draw.acquire_debug_draw_interface()
+                        except (ImportError, ModuleNotFoundError, AttributeError):
+                            try:
+                                import carb
+                                if hasattr(carb, "plugins"):
+                                    apply_propeller_aerodynamics._dbg_draw = carb.plugins.acquire_interface("omni.isaac.debug_draw.DebugDrawInterface")
+                                else:
+                                    apply_propeller_aerodynamics._dbg_draw = None
+                            except Exception:
+                                apply_propeller_aerodynamics._dbg_draw = None
+
+                    if apply_propeller_aerodynamics._dbg_draw is None:
+                        apply_propeller_aerodynamics._viz_disabled = True
+
+                if not getattr(apply_propeller_aerodynamics, "_viz_disabled", False):
+                    dbg = apply_propeller_aerodynamics._dbg_draw
+                    env_id = 0
+                    prop_pos_w = robot.data.body_pos_w[env_id, propeller_body_ids, :]
+                    prop_force_w = thrust_world[env_id]
+                    for i in range(prop_force_w.shape[0]):
+                        start = prop_pos_w[i].cpu().numpy()
+                        end = (prop_pos_w[i] + visualize_scale * prop_force_w[i]).cpu().numpy()
+                        color = (0.1, 0.9, 0.1, 1.0)
+                        if hasattr(dbg, "draw_arrows"):
+                            import numpy as np
+                            dbg.draw_arrows(
+                                starts=np.asarray([start], dtype=np.float32),
+                                ends=np.asarray([end], dtype=np.float32),
+                                colors=np.asarray([color], dtype=np.float32),
+                                arrow_size=3.0,
+                                line_thickness=3.0,
+                                duration=0.2,
+                            )
+                        elif hasattr(dbg, "draw_lines"):
+                            import numpy as np
+                            dbg.draw_lines(
+                                points=np.asarray([start, end], dtype=np.float32),
+                                colors=np.asarray([color, color], dtype=np.float32),
+                                thickness=3.0,
+                                duration=0.2,
+                            )
+            except Exception as e:
+                apply_propeller_aerodynamics._viz_disabled = True
+                print(f"[AERO VIZ] Thrust visualization disabled (one-time): {e}", flush=True)
     # robot.set_external_force_and_torque(
     #     torch.zeros_like(external_forces), 
     #     torch.zeros_like(external_torques),
