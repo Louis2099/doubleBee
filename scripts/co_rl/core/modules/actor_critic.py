@@ -43,6 +43,8 @@ class ActorCritic(nn.Module):
             else:
                 actor_layers.append(nn.Linear(actor_hidden_dims[layer_index], actor_hidden_dims[layer_index + 1]))
                 actor_layers.append(activation)
+        # Add tanh activation to bound actions to [-1, 1]
+        actor_layers.append(nn.Tanh())
         self.actor = nn.Sequential(*actor_layers)
 
         # Value function
