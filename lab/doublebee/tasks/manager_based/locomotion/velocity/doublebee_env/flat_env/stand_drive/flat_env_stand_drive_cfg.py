@@ -77,6 +77,18 @@ class DoubleBeeEventsCfg:
         },
     )
 
+    # Joint action logging disabled.
+    # log_prop_servo_joint_state = EventTerm(
+    #     func=joint_logging.log_propeller_servo_joint_state,
+    #     mode="interval",
+    #     interval_range_s=(0.0, 0.0),
+    #     params={
+    #         "log_path": "prop_servo_joint_log.csv",
+    #         "log_interval_steps": 1,
+    #         "env_ids_to_log": [0],
+    #     },
+    # )
+
     # NOTE: Reset robot state on reset - use terrain flat patches for spawn position
     reset_base = EventTerm(
         func=mdp.reset_root_state_from_terrain,
@@ -166,6 +178,18 @@ class DoubleBeeEventsCfg_PLAY:
             "velocity_range": (0.0, 0.0),
         },
     )
+
+    # Joint action logging disabled.
+    # log_prop_servo_joint_state = EventTerm(
+    #     func=joint_logging.log_propeller_servo_joint_state,
+    #     mode="interval",
+    #     interval_range_s=(0.0, 0.0),
+    #     params={
+    #         "log_path": "prop_servo_joint_log.csv",
+    #         "log_interval_steps": 1,
+    #         "env_ids_to_log": [0],
+    #     },
+    # )
 
 
 @configclass

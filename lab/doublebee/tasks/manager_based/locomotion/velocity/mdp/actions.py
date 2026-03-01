@@ -121,8 +121,7 @@ class ActionsCfg4D:
     )
 
     # Single propeller action (will be duplicated to left/right with opposite signs)
-    # Mapping: policy [-1,1] -> [0,1] -> left [0,500] rad/s, right [0,-500] rad/s
-    # processed = offset + scale*action => left: 250*(action+1), right: -250*(action+1)
+    # Mapping: [0,1] -> left [0,500] rad/s, right [0,-500] rad/s; processed = offset + scale*action
     propeller_vel = mdp.JointVelocityActionCfg(
         asset_name="robot",
         joint_names=["leftPropeller", "rightPropeller"],

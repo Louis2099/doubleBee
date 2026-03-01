@@ -60,7 +60,18 @@ from isaaclab.envs import (
 from lab.doublebee.isaaclab.isaaclab.envs import ManagerBasedConstraintRLEnv
 
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_pickle, dump_yaml
+# YAML: IsaacLab provides this
+from isaaclab.utils.io import dump_yaml
+
+# Pickle: IsaacLab 0.53.0 does NOT provide dump_pickle, so define it here
+import pickle
+from pathlib import Path
+
+def dump_pickle(filename: str, data) -> None:
+    path = Path(filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg

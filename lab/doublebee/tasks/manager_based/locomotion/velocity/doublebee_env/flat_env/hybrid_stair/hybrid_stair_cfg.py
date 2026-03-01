@@ -78,6 +78,18 @@ class DoubleBeeEventsCfg:
         },
     )
 
+    # Joint action logging disabled.
+    # log_prop_servo_joint_state = EventTerm(
+    #     func=joint_logging.log_propeller_servo_joint_state,
+    #     mode="interval",
+    #     interval_range_s=(0.0, 0.0),
+    #     params={
+    #         "log_path": "prop_servo_joint_log.csv",
+    #         "log_interval_steps": 1,
+    #         "env_ids_to_log": [0],
+    #     },
+    # )
+
     # NOTE: Reset/spawn is controlled here. Position is sampled from terrain "init_pos" flat patches.
     # - pose_range: roll, pitch, yaw in rad. Only orientation is randomized (position from terrain).
     # - velocity_range: x, y, z in m/s (linear); roll, pitch, yaw in rad/s (angular). Sampled uniformly.

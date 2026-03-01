@@ -24,6 +24,60 @@ import carb  # For logging
 
 from .thrust_energy_model import pwm_to_thrust
 
+# Print action->thrust chain every N steps for env 0 during training
+_ACTION_THRUST_PRINT_INTERVAL = 500
+
+# -----------------------------------------------------------------------------
+# Joint velocity response (how fast joint_vel tracks vel_target)
+# -----------------------------------------------------------------------------
+# Propeller joints use a PD actuator with stiffness=0 and damping=1000 (see
+# doublebee_v1.py "propellers" actuator). Torque = damping * (vel_target - joint_vel),
+# so dynamics are first-order: d(omega)/dt = (damping / I_eff) * (vel_target - omega).
+# Time constant: tau = I_eff / damping. With joint armature ~0.01 and link inertia,
+# I_eff is small so tau is on the order of milliseconds; response is typically fast.
+#
+# How to quantify:
+#   1. Velocity error: in the [action->thrust] log, vel_error = vel_target - joint_vel.
+#      Small steady-state error and fast decay after a step = fast response.
+#   2. Step response: set a constant velocity target (e.g. 200 rad/s), log joint_vel
+#      every step; time to reach 63% of the step is tau; to 90% is ~2.3*tau.
+#   3. From config: tau_approx = (joint_armature + link_inertia_about_axis) / damping.
+#      Read robot.data.joint_armature for the propeller joint indices.
+# -----------------------------------------------------------------------------
+
+
+def _print_action_thrust_chain(env, propeller_vel, pwm, thrust_np):
+    """Print policy action -> velocity target -> joint_vel -> PWM -> thrust for env 0 periodically."""
+    if not hasattr(_print_action_thrust_chain, "_step_count"):
+        _print_action_thrust_chain._step_count = 0
+    _print_action_thrust_chain._step_count += 1
+    if _print_action_thrust_chain._step_count % _ACTION_THRUST_PRINT_INTERVAL != 0:
+        return
+    env_id = 0
+    # Get propeller action term (raw policy output and processed velocity target)
+    raw_action = processed_action = None
+    if hasattr(env, "action_manager"):
+        try:
+            term = env.action_manager.get_term("propeller_vel")
+            raw_action = term.raw_actions[env_id].detach().cpu().numpy()
+            processed_action = term.processed_actions[env_id].detach().cpu().numpy()
+        except Exception:
+            pass
+    joint_vel = propeller_vel[env_id].detach().cpu().numpy()
+    pwm_np = pwm[env_id].detach().cpu().numpy()
+    thrust = thrust_np[env_id]
+    vel_error = (processed_action - joint_vel) if processed_action is not None else None
+    parts = [
+        f"step={_print_action_thrust_chain._step_count} env=0",
+        f"raw_action(policy)={raw_action}",
+        f"vel_target(rad/s)={processed_action}",
+        f"joint_vel(rad/s)={joint_vel}",
+        f"vel_error(rad/s)={vel_error}" if vel_error is not None else None,
+        f"PWM={pwm_np}",
+        f"thrust(N)={thrust}",
+    ]
+    print("[action->thrust] " + " | ".join(p for p in parts if p is not None), flush=True)
+
 
 def apply_propeller_aerodynamics(
     env: ManagerBasedEnv,
@@ -102,21 +156,24 @@ def apply_propeller_aerodynamics(
     #     print(f"  Left propeller vel: {propeller_vel[0, 0].item():.2f}, Right propeller vel: {propeller_vel[0, 1].item():.2f}")
     
     """
-    Thrust calculation: rotation speed (rad/s) -> PWM [1000, 2000] -> polynomial thrust.
-    |rotation speed| maps linearly: 0 rad/s -> 1000, 500 rad/s -> 2000.
+    Thrust calculation: rotation speed (rad/s) -> PWM [1000, 1600] -> polynomial thrust.
+    |rotation speed| maps linearly: 0 rad/s -> 1000, 500 rad/s -> 1600.
     """
-    # Map |omega| (rad/s) to PWM: pwm = 1000 + (|omega| / 500) * 1000, clamped to [1000, 2000]
+    # Map |omega| (rad/s) to PWM: pwm = 1000 + (|omega| / 500) * 600, clamped to [1000, 1600]
     abs_omega = propeller_vel.abs()
-    pwm = 1000.0 + (abs_omega / 500.0) * 1000.0
-    pwm = torch.clamp(pwm, min=1000.0, max=2000.0)
+    pwm = 1000.0 + (abs_omega / 500.0) * 650.0
+    pwm = torch.clamp(pwm, min=1000.0, max=1650.0)
     pwm_np = pwm.cpu().numpy()
 
     thrust_np = pwm_to_thrust(pwm_np, target="thrust")
-    
-    # Debug: Show thrust output
-    # if apply_propeller_aerodynamics._vel_debug_counter <= 10:
-    #     print(f"  Thrust from model: {thrust_np[0]}")
-    #     print(f"  Left thrust: {thrust_np[0, 0]:.2f}N, Right thrust: {thrust_np[0, 1]:.2f}N")
+
+    # Training printout: action -> velocity target -> joint_vel -> PWM -> thrust (env 0, every N steps)
+    _print_action_thrust_chain(
+        env=env,
+        propeller_vel=propeller_vel,
+        pwm=pwm,
+        thrust_np=thrust_np,
+    )
     
     thrust_magnitude = torch.as_tensor(
         thrust_np, device=robot.device, dtype=propeller_vel.dtype
