@@ -83,22 +83,23 @@ class DoubleBeeEventsCfg:
     # - velocity_range: x, y, z in m/s (linear); roll, pitch, yaw in rad/s (angular). Sampled uniformly.
     # To randomize initial velocity and orientation, set non-zero (min, max) for the desired keys.
     reset_base = EventTerm(
-        func=mdp.reset_root_state_from_terrain,
+        func=mdp.reset_root_state_from_terrain_aligned,
         mode="reset",
         params={
             "pose_range": {
-                "roll": (0.0, 0.0),   # (min, max) rad — e.g. (-0.1, 0.1) for small roll
-                "pitch": (-0.0, 0.0),  # (min, max) rad
-                "yaw_noise": (-0.0, 0.0),  # rad, added to target-facing yaw (default in code if omitted)
+                "roll": (0.0, 0.0),       # No roll randomization - perfectly upright
+                "pitch": (0.0, 0.0),      # No pitch randomization - perfectly level
+                "yaw_noise": (0.0, 0.0),  # No yaw noise - perfect alignment toward target
             },
             "velocity_range": {
-                "x": (-0.0, 0.0),   # linear m/s
-                "y": (-0.0, 0.0),
-                "z": (0.0, 0.0),
-                "roll": (-0.0, 0.0),   # angular rad/s
-                "pitch": (-0.0, 0.0),
-                "yaw": (-0.0, 0.0),
+                "x": (0.0, 0.0),      # No initial linear velocity in X
+                "y": (0.0, 0.0),      # No initial linear velocity in Y
+                "z": (0.0, 0.0),      # No initial linear velocity in Z
+                "roll": (0.0, 0.0),   # No initial angular velocity around X (roll rate)
+                "pitch": (0.0, 0.0),  # No initial angular velocity around Y (pitch rate)
+                "yaw": (0.0, 0.0),    # No initial angular velocity around Z (yaw rate - NOT SPINNING)
             },
+            "align_axis": "x",  # Align on X axis (robot moves along Y axis)
         },
     )
 

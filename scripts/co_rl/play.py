@@ -645,8 +645,9 @@ def main():
                 actions = policy(encoded_obs)
             else:
                 actions = policy(obs)
-            clipped_actions = torch.clamp(actions, -1.0, 1.0)
-            obs, _, _, extras = env.step(clipped_actions)
+            # Note: Actions are already bounded to [-1, 1] by tanh activation in actor network
+            # No need for explicit clamping
+            obs, _, _, extras = env.step(actions)
         
         # Update target visualizer if enabled
         if target_visualizer is not None:
