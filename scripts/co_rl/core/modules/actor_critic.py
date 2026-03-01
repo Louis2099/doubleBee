@@ -99,19 +99,26 @@ class ActorCritic(nn.Module):
         return self.distribution.entropy().sum(dim=-1)
 
     def update_distribution(self, observations):
+        # Actor network outputs mean bounded to [-1, 1] by final tanh layer
         mean = self.actor(observations)
+        # Create Gaussian distribution: N(mean, std)
+        # Note: samples can exceed [-1, 1] due to std, so we apply tanh in act()
         self.distribution = Normal(mean, mean * 0.0 + self.std)
 
     def act(self, observations, **kwargs):
         self.update_distribution(observations)
-        return self.distribution.sample()
+        # Sample from distribution and apply tanh to bound to [-1, 1]
+        # tanh provides smooth, differentiable bounding (vs hard clamp)
+        actions = self.distribution.sample()
+        return torch.tanh(actions)
 
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
     def act_inference(self, observations):
         actions_mean = self.actor(observations)
-        return actions_mean
+
+        return torch.tanh(actions_mean)
 
     def evaluate(self, critic_observations, **kwargs):
         value = self.critic(critic_observations)
