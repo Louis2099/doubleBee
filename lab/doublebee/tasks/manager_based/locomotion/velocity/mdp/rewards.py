@@ -320,8 +320,8 @@ def penalize_tilt_angle(env) -> torch.Tensor:
     
     # Weights for each component (can be adjusted based on importance)
     # Both roll and pitch are important for stability
-    weight_x = 4.0  # Pitch-like tilt
-    weight_y = 6.0  # Roll-like tilt
+    weight_x = 3.0  # Pitch-like tilt
+    weight_y = 7.0  # Roll-like tilt
     
     # Compute weighted sum of squared tilt components
     # Using squared values to strongly penalize large tilts
@@ -496,7 +496,7 @@ class RewardsCfg:
     
     propeller_efficiency = RewTerm(
         func=penalize_propeller_efficiency,
-        weight=0.1,
+        weight=0.01,
     )
     """Penalty for excessive propeller speeds to encourage efficiency.
     Computes penalty based on propeller joint velocities, scaled to [-1, 0] using e^(-x) - 1.
