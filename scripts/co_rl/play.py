@@ -6,6 +6,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import csv
 import os
 import re
 import sys
@@ -54,6 +55,7 @@ parser.add_argument("--real-time", action="store_true", default=True, help="Run 
 
 parser.add_argument("--num_policy_stacks", type=int, default=2, help="Number of policy stacks.")
 parser.add_argument("--num_critic_stacks", type=int, default=2, help="Number of critic stacks.")
+parser.add_argument("--obs_latency_steps", type=int, default=0, help="Delay policy obs by N steps (0=no delay, 1=one-step latency).")
 parser.add_argument(
     "--plot_velocity",
     action="store_true",
@@ -67,6 +69,18 @@ parser.add_argument(
     default=None,
     metavar=("VX", "VY", "VZ", "WZ"),
     help="Fixed velocity command for inference: [lin_vel_x, lin_vel_y, lin_vel_z, ang_vel_z]. Example: --cmd_vel 0.5 0.0 0.0 0.0",
+)
+parser.add_argument(
+    "--log_policy_io",
+    action="store_true",
+    default=False,
+    help="Log raw policy input (obs) and output (actions) for env 0 to a CSV file.",
+)
+parser.add_argument(
+    "--log_policy_io_path",
+    type=str,
+    default="policy_io_env0.csv",
+    help="Path for policy I/O CSV (default: policy_io_env0.csv). Used when --log_policy_io is set.",
 )
 
 # append CO-RL cli arguments
@@ -277,6 +291,7 @@ def main():
     agent_cfg: CoRlPolicyRunnerCfg = cli_args.parse_co_rl_cfg(args_cli.task, args_cli)
     agent_cfg.num_policy_stacks = args_cli.num_policy_stacks if args_cli.num_policy_stacks is not None else agent_cfg.num_policy_stacks
     agent_cfg.num_critic_stacks = args_cli.num_critic_stacks if args_cli.num_critic_stacks is not None else agent_cfg.num_critic_stacks
+    agent_cfg.obs_latency_steps = args_cli.obs_latency_steps if args_cli.obs_latency_steps is not None else agent_cfg.obs_latency_steps
 
     is_off_policy = False if agent_cfg.to_dict()["algorithm"]["class_name"] in ["PPO", "SRMPPO"] else True
     # specify directory for logging experiments
@@ -620,6 +635,15 @@ def main():
     
     timestep = 0
     start_time = time.time()
+
+    # Policy I/O logging for env 0
+    policy_io_file = None
+    policy_io_writer = None
+    policy_io_header_written = False
+    if args_cli.log_policy_io:
+        policy_io_path = os.path.abspath(args_cli.log_policy_io_path)
+        policy_io_file = open(policy_io_path, "w", newline="")
+        print(f"[INFO] Logging policy input/output for env 0 to: {policy_io_path}")
     
     # Simulate environment and collect data
     while simulation_app.is_running():
@@ -641,13 +665,24 @@ def main():
         
         with torch.inference_mode():
             if srm is not None:
-                encoded_obs = runner.alg.encode_obs(obs)
-                actions = policy(encoded_obs)
+                policy_input = runner.alg.encode_obs(obs)
+                actions = policy(policy_input)
             else:
-                actions = policy(obs)
+                policy_input = obs
+                actions = policy(policy_input)
             # Note: Actions are already bounded to [-1, 1] by tanh activation in actor network
-            # No need for explicit clamping
             obs, _, _, extras = env.step(actions)
+
+        # Log raw policy input (obs) and output (actions) for env 0 to CSV
+        if policy_io_file is not None and policy_input.shape[0] > 0:
+            o = policy_input[0].detach().cpu().numpy()
+            a = actions[0].detach().cpu().numpy()
+            if not policy_io_header_written:
+                header = ["step"] + [f"obs_{i}" for i in range(len(o))] + [f"action_{i}" for i in range(len(a))]
+                policy_io_writer = csv.writer(policy_io_file)
+                policy_io_writer.writerow(header)
+                policy_io_header_written = True
+            policy_io_writer.writerow([timestep] + o.tolist() + a.tolist())
         
         # Update target visualizer if enabled
         if target_visualizer is not None:
@@ -754,6 +789,9 @@ def main():
             analyzer.append(extras['observations']['obs_info'])
     
     # Cleanup
+    if policy_io_file is not None:
+        policy_io_file.close()
+        print(f"[INFO] Policy I/O log saved to: {os.path.abspath(args_cli.log_policy_io_path)}")
     if plotter is not None:
         plotter.close()
     

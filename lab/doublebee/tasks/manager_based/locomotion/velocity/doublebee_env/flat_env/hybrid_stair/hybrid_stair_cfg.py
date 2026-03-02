@@ -16,6 +16,7 @@ from lab.doublebee.assets.doublebee import DOUBLEBEE_CFG
 from lab.doublebee.tasks.manager_based.locomotion.velocity.doublebee_env.velocity_env_cfg import DoubleBeeVelocityEnvCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import aerodynamics
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import events as mdp  # Use local events module instead of source
+from isaaclab.envs.mdp import randomize_actuator_gains
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.rewards import RewardsCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.stair_config import StairConfigCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.velocity_command import TerrainTargetDirectionCommandCfg
@@ -62,6 +63,19 @@ class DoubleBeeEventsCfg:
     #     },
     # )
 
+    # Domain randomization: servo actuator gains ±20% (stiffness & damping)
+    randomize_servo_actuator_gains = EventTerm(
+        func=randomize_actuator_gains,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["leftPropellerServo", "rightPropellerServo"]),
+            "stiffness_distribution_params": (0.8, 1.2),
+            "damping_distribution_params": (0.8, 1.2),
+            "operation": "scale",
+            "distribution": "log_uniform",
+        },
+    )
+
     # Apply propeller aerodynamics every physics step
     propeller_aerodynamics = EventTerm(
         func=aerodynamics.apply_propeller_aerodynamics,
@@ -72,7 +86,7 @@ class DoubleBeeEventsCfg:
             "propeller_body_names": ("leftPropeller", "rightPropeller"),
             "thrust_coefficient": 1e-4,  # Kept for compatibility (unused in PWM model)
             "max_thrust_per_propeller": 500.0,  # Maximum thrust per propeller
-            "visualize": True,
+            "visualize": False,  # carb.plugins not available in all Isaac builds; set True only when debugging
             "visualize_scale": 0.2,  # Increased scale for better visibility
             # asset_cfg defaults to SceneEntityCfg("robot")
         },
@@ -89,6 +103,13 @@ class DoubleBeeEventsCfg:
     #         "env_ids_to_log": [0],
     #     },
     # )
+
+    # Domain randomization: thrust output ±20% per env per propeller (sampled at reset)
+    sample_thrust_scale_dr = EventTerm(
+        func=aerodynamics.sample_thrust_scale_dr,
+        mode="reset",
+        params={"range_low": 0.8, "range_high": 1.2, "num_propellers": 2},
+    )
 
     # NOTE: Reset/spawn is controlled here. Position is sampled from terrain "init_pos" flat patches.
     # - pose_range: roll, pitch, yaw in rad. Only orientation is randomized (position from terrain).
@@ -156,7 +177,7 @@ class DoubleBeeEventsCfg_PLAY:
             "propeller_body_names": ("leftPropeller", "rightPropeller"),
             "thrust_coefficient": 1e-4,  # Kept for compatibility (unused in PWM model)
             "max_thrust_per_propeller": 500.0,  # Maximum thrust per propeller
-            "visualize": True,
+            "visualize": False,  # carb.plugins not available in all Isaac builds; set True only when debugging
             "visualize_scale": 0.2,  # Increased scale for better visibility
             # asset_cfg defaults to SceneEntityCfg("robot")
         },

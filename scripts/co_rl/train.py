@@ -28,6 +28,7 @@ parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy 
 parser.add_argument("--experiment_description", type=str, default=None, help="Description of the experiment.")
 parser.add_argument("--num_policy_stacks", type=int, default=2, help="Number of policy stacks.")
 parser.add_argument("--num_critic_stacks", type=int, default=2, help="Number of critic stacks.")
+parser.add_argument("--obs_latency_steps", type=int, default=0, help="Delay policy obs by N steps (0=no delay, 1=one-step latency).")
 
 # append CO-RL cli arguments
 cli_args.add_co_rl_args(parser)
@@ -116,6 +117,7 @@ def main():
     )
     agent_cfg.num_policy_stacks = args_cli.num_policy_stacks if args_cli.num_policy_stacks is not None else agent_cfg.num_policy_stacks
     agent_cfg.num_critic_stacks = args_cli.num_critic_stacks if args_cli.num_critic_stacks is not None else agent_cfg.num_critic_stacks
+    agent_cfg.obs_latency_steps = args_cli.obs_latency_steps if args_cli.obs_latency_steps is not None else agent_cfg.obs_latency_steps
 
     is_off_policy = False if agent_cfg.to_dict()["algorithm"]["class_name"] in ["PPO", "SRMPPO"] else True
 

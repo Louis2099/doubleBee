@@ -252,6 +252,15 @@ class CoRlPolicyRunnerCfg:
     num_critic_stacks: int = 0
     """The number of frames to stack. Default is 0."""
 
+    obs_latency_steps: int = 0
+    """Number of policy steps to delay observations fed to the actor.
+    
+    When set to 1 the policy receives obs(t-1) instead of obs(t), simulating
+    one-step sensor latency (~20 ms at decimation=4, dt=0.005).  The critic
+    still sees the current (non-delayed) observations so value estimation
+    remains accurate.  Default is 0 (no delay).
+    """
+
     use_constraint_rl: bool = False
     """Whether to use constraints as termination."""
 ########################################################################################################################
