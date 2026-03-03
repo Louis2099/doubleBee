@@ -187,17 +187,84 @@ class OnPolicyRunner:
 
         ep_string = ""
         if locs["ep_infos"]:
+            def _to_1d_tensor(value):
+                if not isinstance(value, torch.Tensor):
+                    value = torch.tensor([value], device=self.device)
+                else:
+                    value = value.to(self.device)
+                if len(value.shape) == 0:
+                    value = value.unsqueeze(0)
+                return value.reshape(-1)
+
+            skip_keys = set()
+            def _aggregate_weighted_metric(
+                numerator_key: str,
+                denominator_key: str,
+                output_key: str,
+                extra_skip_keys=None,
+            ):
+                nonlocal ep_string
+                numerators = []
+                denominators = []
+                for ep_info in locs["ep_infos"]:
+                    if numerator_key in ep_info and denominator_key in ep_info:
+                        numerators.append(_to_1d_tensor(ep_info[numerator_key]))
+                        denominators.append(_to_1d_tensor(ep_info[denominator_key]))
+                if not denominators:
+                    return
+
+                numerator_sum = torch.cat(numerators).sum()
+                denominator_sum = torch.cat(denominators).sum()
+                if denominator_sum.item() <= 0:
+                    return
+
+                weighted_value = numerator_sum / denominator_sum
+                self.writer.add_scalar(output_key, weighted_value, locs["it"])
+                ep_string += f"""{f'{output_key}:':>{pad}} {weighted_value:.4f}\n"""
+                skip_keys.update({output_key, numerator_key, denominator_key})
+                if extra_skip_keys is not None:
+                    skip_keys.update(extra_skip_keys)
+                return numerator_sum, denominator_sum
+
+            # Exact episode-level success rate:
+            #   sum(success_count_i) / sum(total_count_i)
+            success_aggregates = _aggregate_weighted_metric(
+                numerator_key="Metrics/success/count",
+                denominator_key="Metrics/success/total",
+                output_key="Metrics/success/rate",
+            )
+            if success_aggregates is not None:
+                total_success, total_episodes = success_aggregates
+                self.writer.add_scalar("Metrics/success/total_successful_trajectories", total_success, locs["it"])
+                self.writer.add_scalar("Metrics/success/total_trajectories", total_episodes, locs["it"])
+                ep_string += f"""{f'Metrics/success/total_successful_trajectories:':>{pad}} {total_success:.1f}\n"""
+                ep_string += f"""{f'Metrics/success/total_trajectories:':>{pad}} {total_episodes:.1f}\n"""
+
+            # Exact episode-level mean energy across all completed trajectories:
+            #   sum(energy_sum_i) / sum(energy_count_i)
+            _aggregate_weighted_metric(
+                numerator_key="Metrics/energy/sum",
+                denominator_key="Metrics/energy/count",
+                output_key="Metrics/energy/average_consumption",
+            )
+
+            # Exact episode-level mean energy across successful trajectories only:
+            #   sum(successful_energy_sum_i) / sum(successful_count_i)
+            _aggregate_weighted_metric(
+                numerator_key="Metrics/energy/successful_sum",
+                denominator_key="Metrics/energy/successful_count",
+                output_key="Metrics/energy/successful_trajectories",
+            )
+
             for key in locs["ep_infos"][0]:
+                if key in skip_keys:
+                    continue
                 infotensor = torch.tensor([], device=self.device)
                 for ep_info in locs["ep_infos"]:
                     # handle scalar and zero dimensional tensor infos
                     if key not in ep_info:
                         continue
-                    if not isinstance(ep_info[key], torch.Tensor):
-                        ep_info[key] = torch.Tensor([ep_info[key]])
-                    if len(ep_info[key].shape) == 0:
-                        ep_info[key] = ep_info[key].unsqueeze(0)
-                    infotensor = torch.cat((infotensor, ep_info[key].to(self.device)))
+                    infotensor = torch.cat((infotensor, _to_1d_tensor(ep_info[key])))
                 value = torch.mean(infotensor)
                 # log to logger and terminal
                 if "/" in key:

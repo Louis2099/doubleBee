@@ -496,23 +496,38 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
         # Convert env_ids to tensor for indexing
         env_ids_tensor = torch.tensor(list(env_ids), device=self.device, dtype=torch.long)
         
-        # 1. Average energy consumption (all trajectories)
-        avg_energy = self.episode_energy_buf[env_ids_tensor].mean().item()
+        # 1. Energy over all completed trajectories in this reset batch
+        energy_values = self.episode_energy_buf[env_ids_tensor]
+        energy_sum = energy_values.sum().item()
+        energy_count = len(env_ids)
+        avg_energy = energy_sum / energy_count if energy_count > 0 else 0.0
+        self.extras["log"]["Metrics/energy/sum"] = float(energy_sum)
+        self.extras["log"]["Metrics/energy/count"] = float(energy_count)
         self.extras["log"]["Metrics/energy/average_consumption"] = avg_energy
         
         # 2. Success rate
         success_count = self.episode_success_buf[env_ids_tensor].sum().item()
         total_count = len(env_ids)
         success_rate = success_count / total_count if total_count > 0 else 0.0
+        # Log both numerator and denominator so runners can aggregate exact weighted rate across reset batches.
+        self.extras["log"]["Metrics/success/count"] = float(success_count)
+        self.extras["log"]["Metrics/success/total"] = float(total_count)
         self.extras["log"]["Metrics/success/rate"] = success_rate
         
         # 3. Energy consumption for successful trajectories only
         successful_mask = self.episode_success_buf[env_ids_tensor]
         if successful_mask.any():
-            avg_energy_success = self.episode_energy_buf[env_ids_tensor][successful_mask].mean().item()
+            successful_energy_values = self.episode_energy_buf[env_ids_tensor][successful_mask]
+            successful_energy_sum = successful_energy_values.sum().item()
+            successful_count = int(successful_mask.sum().item())
+            avg_energy_success = successful_energy_sum / successful_count
+            self.extras["log"]["Metrics/energy/successful_sum"] = float(successful_energy_sum)
+            self.extras["log"]["Metrics/energy/successful_count"] = float(successful_count)
             self.extras["log"]["Metrics/energy/successful_trajectories"] = avg_energy_success
         else:
             # If no successful trajectories, log 0 or NaN
+            self.extras["log"]["Metrics/energy/successful_sum"] = 0.0
+            self.extras["log"]["Metrics/energy/successful_count"] = 0.0
             self.extras["log"]["Metrics/energy/successful_trajectories"] = 0.0
         
         # Reset the buffers for these environments
