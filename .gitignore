@@ -12,3 +12,4 @@ mjcf/
 *.asset_hash
 configuration/
 *.usd
+*.tex
