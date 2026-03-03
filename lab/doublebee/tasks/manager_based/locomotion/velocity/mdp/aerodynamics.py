@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import quat_rotate
+from isaaclab.utils.math import quat_apply 
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -227,7 +227,7 @@ def apply_propeller_aerodynamics(
     
     # Rotate thrust vector from local frame to world frame
     # Shape: [num_envs, num_propellers, 3]
-    thrust_world = quat_rotate(propeller_quat_w, thrust_local)
+    thrust_world = quat_apply(propeller_quat_w, thrust_local)
     
     # Prepare force tensors for all bodies
     # Shape: [num_envs, num_bodies, 3]
