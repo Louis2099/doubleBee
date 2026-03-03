@@ -465,14 +465,12 @@ def penalize_energy_consumption(env) -> torch.Tensor:
         right_propeller_idx = robot.joint_names.index("rightPropeller")
         propeller_vels = robot.data.joint_vel[:, [left_propeller_idx, right_propeller_idx]]  # [num_envs, 2]
         
-        # Convert rad/s to RPM: RPM = (rad/s) * (60 / 2π)
-        propeller_rpm = propeller_vels * (60.0 / (2.0 * np.pi))  # [num_envs, 2]
         
         # Convert RPM to equivalent PWM (approximate mapping)
         # Typical PWM range: 1000-2000, typical RPM range: 0-10000
         # Using linear approximation: PWM = 1000 + (RPM / 10000) * 1000
         # Clamp to valid PWM range [1000, 2000]
-        propeller_pwm = 1000.0 + (torch.abs(propeller_rpm) / 10000.0) * 1000.0  # [num_envs, 2]
+        propeller_pwm = 1000.0 + (torch.abs(propeller_vels) / 500.0) * 650.0  # [num_envs, 2]
         propeller_pwm = torch.clamp(propeller_pwm, min=1000.0, max=2000.0)
         
         # Convert PWM to power (W) using the energy model
