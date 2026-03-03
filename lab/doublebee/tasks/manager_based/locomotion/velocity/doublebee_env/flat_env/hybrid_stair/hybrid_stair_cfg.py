@@ -49,19 +49,19 @@ from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfg
 class DoubleBeeEventsCfg:
     """Event configuration for DoubleBee hybrid (propeller + wheel) staircase task."""
 
-
-    # Domain randomization: servo actuator gains ±20% (stiffness & damping)
-    randomize_servo_actuator_gains = EventTerm(
-        func=randomize_actuator_gains,
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=["leftPropellerServo", "rightPropellerServo"]),
-            "stiffness_distribution_params": (0.8, 1.2),
-            "damping_distribution_params": (0.8, 1.2),
-            "operation": "scale",
-            "distribution": "log_uniform",
-        },
-    )
+    # One-time at spawn: assign PhysX material to wheel colliders so friction is correct
+    # apply_wheel_friction = EventTerm(
+    #     func=mdp.apply_wheel_physx_material,
+    #     mode="startup",
+    #     params={
+    #         "robot_prim_path_template": "/World/envs/env_{}/Doublebee",
+    #         "static_friction": 1.2,
+    #         "dynamic_friction": 0.9,
+    #         "restitution": 0.0,
+    #         "friction_combine_mode": "multiply",
+    #         "restitution_combine_mode": "multiply",
+    #     },
+    # )
 
     # Apply propeller aerodynamics every physics step
     propeller_aerodynamics = EventTerm(
