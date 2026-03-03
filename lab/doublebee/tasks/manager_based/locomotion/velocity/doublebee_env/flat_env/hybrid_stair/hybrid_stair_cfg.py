@@ -49,19 +49,6 @@ from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfg
 class DoubleBeeEventsCfg:
     """Event configuration for DoubleBee hybrid (propeller + wheel) staircase task."""
 
-    # One-time at spawn: assign PhysX material to wheel colliders so friction is correct
-    # apply_wheel_friction = EventTerm(
-    #     func=mdp.apply_wheel_physx_material,
-    #     mode="startup",
-    #     params={
-    #         "robot_prim_path_template": "/World/envs/env_{}/Doublebee",
-    #         "static_friction": 1.2,
-    #         "dynamic_friction": 0.9,
-    #         "restitution": 0.0,
-    #         "friction_combine_mode": "multiply",
-    #         "restitution_combine_mode": "multiply",
-    #     },
-    # )
 
     # Domain randomization: servo actuator gains ±20% (stiffness & damping)
     randomize_servo_actuator_gains = EventTerm(
@@ -105,11 +92,11 @@ class DoubleBeeEventsCfg:
     # )
 
     # Domain randomization: thrust output ±20% per env per propeller (sampled at reset)
-    sample_thrust_scale_dr = EventTerm(
-        func=aerodynamics.sample_thrust_scale_dr,
-        mode="reset",
-        params={"range_low": 0.8, "range_high": 1.2, "num_propellers": 2},
-    )
+    # sample_thrust_scale_dr = EventTerm(
+    #     func=aerodynamics.sample_thrust_scale_dr,
+    #     mode="reset",
+    #     params={"range_low": 0.8, "range_high": 1.2, "num_propellers": 2},
+    # )
 
     # NOTE: Reset/spawn is controlled here. Position is sampled from terrain "init_pos" flat patches.
     # - pose_range: roll, pitch, yaw in rad. Only orientation is randomized (position from terrain).

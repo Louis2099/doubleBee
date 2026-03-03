@@ -85,6 +85,9 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
         self.common_step_counter = 0
         # -- init buffers
         self.episode_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        # -- energy tracking buffers
+        self.episode_energy_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
+        self.episode_success_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         # -- set the framerate of the gym video recorder wrapper so that the playback speed of the produced video matches the simulation
         self.metadata["render_fps"] = 1 / self.step_dt
 
@@ -240,6 +243,12 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
         # -- reward computation
         self.reward_buf = self.reward_manager.compute(dt=self.step_dt)
 
+        # -- energy tracking: calculate power consumption and accumulate energy
+        self._update_energy_tracking()
+
+        # -- success tracking: check if robot reached target (uses goal_reached constraint)
+        self._update_success_tracking()
+
         if len(self.recorder_manager.active_terms) > 0:
             # update observations for recording if needed
             self.obs_buf = self.observation_manager.compute()
@@ -363,6 +372,153 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
     Helper functions.
     """
 
+    def _update_energy_tracking(self):
+        """Calculate instantaneous power from propellers and wheels, then accumulate energy.
+        
+        Uses the thrust_energy_model API to convert:
+        - Propeller PWM -> Power (W)
+        - Wheel RPM -> Power (W)
+        
+        Energy (J) = Power (W) * dt (s)
+        """
+        from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.thrust_energy_model import (
+            pwm_to_thrust,
+            rpm_to_power,
+        )
+        
+        robot = self.scene["robot"]
+        
+        # Get propeller and wheel joint velocities (radians/sec)
+        # Assuming joint ordering: [left_propeller, right_propeller, left_wheel, right_wheel]
+        joint_vel = robot.data.joint_vel  # [num_envs, num_joints]
+        
+        # Convert propeller velocities to PWM (assuming direct mapping or using action)
+        # For now, use joint velocity as proxy for PWM (scale appropriately)
+        # Note: You may need to adjust this based on your actuator model
+        # Assuming propellers are first 2 joints and wheels are last 2 joints
+        
+        try:
+            # Get propeller velocities (first 2 joints) - convert rad/s to PWM range
+            # Typical propeller: ~0-3000 rad/s maps to PWM 1000-2000
+            prop_left_vel = joint_vel[:, 0]  # rad/s
+            prop_right_vel = joint_vel[:, 1]  # rad/s
+            
+            # Map rad/s to PWM (linear approximation: 0 rad/s -> 1000 PWM, 3000 rad/s -> 2000 PWM)
+            pwm_left = 1000.0 + (prop_left_vel.abs() / 500.0).clamp(0, 1) * 650.0
+            pwm_right = 1000.0 + (prop_right_vel.abs() / 500.0).clamp(0, 1) * 650.0
+            
+            # Get wheel velocities (last 2 joints) - convert rad/s to RPM
+            wheel_left_vel = joint_vel[:, 2]  # rad/s
+            wheel_right_vel = joint_vel[:, 3]  # rad/s
+            
+            # Convert rad/s to RPM: RPM = (rad/s * 60) / (2 * pi)
+            rpm_left = (wheel_left_vel.abs() * 60.0 / (2.0 * 3.14159265359))
+            rpm_right = (wheel_right_vel.abs() * 60.0 / (2.0 * 3.14159265359))
+            
+            # Calculate power for each component (convert to numpy for API, then back to torch)
+            power_prop_left = torch.tensor([
+                pwm_to_thrust(pwm.item(), target="power") 
+                for pwm in pwm_left
+            ], device=self.device, dtype=torch.float32)
+            
+            power_prop_right = torch.tensor([
+                pwm_to_thrust(pwm.item(), target="power") 
+                for pwm in pwm_right
+            ], device=self.device, dtype=torch.float32)
+            
+            power_wheel_left = torch.tensor([
+                rpm_to_power(rpm.item()) 
+                for rpm in rpm_left
+            ], device=self.device, dtype=torch.float32)
+            
+            power_wheel_right = torch.tensor([
+                rpm_to_power(rpm.item()) 
+                for rpm in rpm_right
+            ], device=self.device, dtype=torch.float32)
+            
+            # Total instantaneous power (W) = sum of all components
+            total_power = power_prop_left + power_prop_right + power_wheel_left + power_wheel_right
+            
+            # Energy (J) = Power (W) * time (s)
+            energy_step = total_power * self.step_dt
+            
+            # Accumulate energy for this episode
+            self.episode_energy_buf += energy_step
+            
+        except Exception as e:
+            # If energy calculation fails, skip silently to avoid breaking training
+            # print(f"[WARNING] Energy tracking failed: {e}")
+            pass
+
+    def _update_success_tracking(self):
+        """Track if robot has reached the target successfully.
+        
+        Uses the existing 'goal_reached' constraint from the constraint manager.
+        If goal_reached constraint fires (value = 1.0), marks the episode as successful.
+        
+        Success is tracked cumulatively: once successful, stays successful for the episode.
+        """
+        # Check if goal_reached constraint exists in constraint manager
+        if not hasattr(self.constraint_manager, "_term_values"):
+            return
+        
+        if "goal_reached" not in self.constraint_manager._term_values:
+            return
+        
+        try:
+            # Get the goal_reached constraint values [num_envs]
+            # 1.0 = goal reached, 0.0 = not reached
+            goal_reached_values = self.constraint_manager._term_values["goal_reached"]
+            
+            # Mark as success if goal_reached fires (once successful, stays successful)
+            # Convert to bool: goal_reached_values > 0.5 to handle float comparisons
+            is_success = goal_reached_values > 0.5
+            
+            # Cumulative tracking: once successful, stays successful for the episode
+            self.episode_success_buf = torch.logical_or(self.episode_success_buf, is_success)
+            
+        except Exception as e:
+            # If success tracking fails, skip silently
+            # print(f"[WARNING] Success tracking failed: {e}")
+            pass
+
+    def _log_energy_and_success_metrics(self, env_ids: Sequence[int]):
+        """Log energy consumption and success metrics for reset environments.
+        
+        This is called in _reset_idx() to aggregate metrics over the just-completed episodes.
+        
+        Args:
+            env_ids: List of environment ids being reset.
+        """
+        if len(env_ids) == 0:
+            return
+        
+        # Convert env_ids to tensor for indexing
+        env_ids_tensor = torch.tensor(list(env_ids), device=self.device, dtype=torch.long)
+        
+        # 1. Average energy consumption (all trajectories)
+        avg_energy = self.episode_energy_buf[env_ids_tensor].mean().item()
+        self.extras["log"]["Metrics/energy/average_consumption"] = avg_energy
+        
+        # 2. Success rate
+        success_count = self.episode_success_buf[env_ids_tensor].sum().item()
+        total_count = len(env_ids)
+        success_rate = success_count / total_count if total_count > 0 else 0.0
+        self.extras["log"]["Metrics/success/rate"] = success_rate
+        
+        # 3. Energy consumption for successful trajectories only
+        successful_mask = self.episode_success_buf[env_ids_tensor]
+        if successful_mask.any():
+            avg_energy_success = self.episode_energy_buf[env_ids_tensor][successful_mask].mean().item()
+            self.extras["log"]["Metrics/energy/successful_trajectories"] = avg_energy_success
+        else:
+            # If no successful trajectories, log 0 or NaN
+            self.extras["log"]["Metrics/energy/successful_trajectories"] = 0.0
+        
+        # Reset the buffers for these environments
+        self.episode_energy_buf[env_ids_tensor] = 0.0
+        self.episode_success_buf[env_ids_tensor] = False
+
     def _configure_gym_env_spaces(self):
         """Configure the action and observation spaces for the Gym environment."""
         # observation space (unbounded since we don't impose any limits)
@@ -440,6 +596,9 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
         # -- recorder manager
         info = self.recorder_manager.reset(env_ids)
         self.extras["log"].update(info)
+
+        # -- log custom metrics for reset environments
+        self._log_energy_and_success_metrics(env_ids)
 
         # reset the episode length buffer
         self.episode_length_buf[env_ids] = 0
