@@ -394,7 +394,7 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
                 right_propeller_idx = robot.joint_names.index("rightPropeller")
                 propeller_vels = robot.data.joint_vel[:, [left_propeller_idx, right_propeller_idx]]
 
-                propeller_pwm = 1000.0 + (torch.abs(propeller_vels) / 500.0) * 650.0
+                propeller_pwm = 1000.0 + (torch.abs(propeller_vels) / 500.0) * 1000.0  # 0 rad/s -> 1000, 500 rad/s -> 2000
                 propeller_pwm = torch.clamp(propeller_pwm, min=1000.0, max=2000.0)
 
                 propeller_power_left = torch.tensor(

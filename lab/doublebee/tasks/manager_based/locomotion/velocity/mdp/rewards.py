@@ -464,7 +464,7 @@ def penalize_energy_consumption(env) -> torch.Tensor:
             right_propeller_idx = robot.joint_names.index("rightPropeller")
             propeller_vels = robot.data.joint_vel[:, [left_propeller_idx, right_propeller_idx]]  # [num_envs, 2]
 
-            propeller_pwm = 1000.0 + (torch.abs(propeller_vels) / 500.0) * 650.0  # [num_envs, 2]
+            propeller_pwm = 1000.0 + (torch.abs(propeller_vels) / 500.0) * 1000.0  # [num_envs, 2]; 0 rad/s -> 1000, 500 rad/s -> 2000
             propeller_pwm = torch.clamp(propeller_pwm, min=1000.0, max=2000.0)
 
             propeller_power_left = torch.tensor(
@@ -582,18 +582,18 @@ class RewardsCfg:
 
     #========== Efficiency Rewards ==========
     
-    propeller_efficiency = RewTerm(
-        func=penalize_propeller_efficiency,
-        weight=0.01,
-    )
+    # propeller_efficiency = RewTerm(
+    #     func=penalize_propeller_efficiency,
+    #     weight=0.01,
+    # )
     """Penalty for excessive propeller speeds to encourage efficiency.
     Computes penalty based on propeller joint velocities, scaled to [-1, 0] using e^(-x) - 1.
     Since thrust ∝ ω², high speeds are inefficient."""
     
-    energy_consumption = RewTerm(
-        func=penalize_energy_consumption,
-        weight=0.05,
-    )
+    # energy_consumption = RewTerm(
+    #     func=penalize_energy_consumption,
+    #     weight=0.05,
+    # )
     """Penalty for total energy consumption from propellers and wheels.
     Uses PWM-to-Power model for propellers and RPM-to-Power model for wheels.
     Computes total power (W) and multiplies by dt to get energy per step (J).
