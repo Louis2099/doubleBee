@@ -430,14 +430,12 @@ def penalize_propeller_on_flat_ground(env, flatness_threshold: float = 0.03) -> 
 
 
 def penalize_energy_consumption(env) -> torch.Tensor:
-    """Penalty for total energy consumption from propellers and wheels.
+    """Penalty for actuator energy consumption (hybrid or wheels-only).
     
-    Computes energy consumption by:
-    1. Converting propeller joint velocities (rad/s) to equivalent PWM
-    2. Using PWM-to-Power model to get propeller power (W)
-    3. Converting wheel joint velocities (rad/s) to RPM
-    4. Using RPM-to-Power model to get wheel power (W)
-    5. Summing total power and multiplying by simulation dt to get energy per step (J)
+    Computes energy from whichever actuators are available in the current robot:
+    1. Propellers (if present): rad/s -> PWM -> power (W)
+    2. Wheels (if present): rad/s -> RPM -> power (W)
+    3. Sum total power and multiply by simulation dt to get energy per step (J)
     
     Args:
         env: The environment instance
@@ -451,88 +449,72 @@ def penalize_energy_consumption(env) -> torch.Tensor:
         pwm_to_thrust,
         rpm_to_power,
     )
-    import numpy as np
-    
+
     robot = env.scene["robot"]
-    
-    try:
-        # Get simulation timestep
-        dt = env.step_dt  # Time per step in seconds
-        
-        # ========== Propeller Energy Consumption ==========
-        # Get propeller joint velocities (rad/s)
-        left_propeller_idx = robot.joint_names.index("leftPropeller")
-        right_propeller_idx = robot.joint_names.index("rightPropeller")
-        propeller_vels = robot.data.joint_vel[:, [left_propeller_idx, right_propeller_idx]]  # [num_envs, 2]
-        
-        
-        # Convert RPM to equivalent PWM (approximate mapping)
-        # Typical PWM range: 1000-2000, typical RPM range: 0-10000
-        # Using linear approximation: PWM = 1000 + (RPM / 10000) * 1000
-        # Clamp to valid PWM range [1000, 2000]
-        propeller_pwm = 1000.0 + (torch.abs(propeller_vels) / 500.0) * 650.0  # [num_envs, 2]
-        propeller_pwm = torch.clamp(propeller_pwm, min=1000.0, max=2000.0)
-        
-        # Convert PWM to power (W) using the energy model
-        # Process each propeller separately and convert to numpy for the model
-        propeller_power_left = torch.tensor(
-            [pwm_to_thrust(pwm.item(), target="power") for pwm in propeller_pwm[:, 0]],
-            device=robot.device,
-            dtype=torch.float32,
-        )  # [num_envs]
-        propeller_power_right = torch.tensor(
-            [pwm_to_thrust(pwm.item(), target="power") for pwm in propeller_pwm[:, 1]],
-            device=robot.device,
-            dtype=torch.float32,
-        )  # [num_envs]
-        
-        total_propeller_power = propeller_power_left + propeller_power_right  # [num_envs] in Watts
-        
-        # ========== Wheel Energy Consumption ==========
-        # Get wheel joint velocities (rad/s)
-        left_wheel_idx = robot.joint_names.index("leftWheel")
-        right_wheel_idx = robot.joint_names.index("rightWheel")
-        wheel_vels = robot.data.joint_vel[:, [left_wheel_idx, right_wheel_idx]]  # [num_envs, 2]
-        
-        # Convert rad/s to RPM: RPM = (rad/s) * (60 / 2π)
-        wheel_rpm = torch.abs(wheel_vels) * (60.0 / (2.0 * np.pi))  # [num_envs, 2]
-        
-        # Convert RPM to power (W) using the RPM-to-Power model
-        # Note: The model expects RPM in range [0, 300] based on the CSV data
-        wheel_rpm_clamped = torch.clamp(wheel_rpm, min=0.0, max=300.0)
-        
-        wheel_power_left = torch.tensor(
-            [rpm_to_power(rpm.item()) for rpm in wheel_rpm_clamped[:, 0]],
-            device=robot.device,
-            dtype=torch.float32,
-        )  # [num_envs]
-        wheel_power_right = torch.tensor(
-            [rpm_to_power(rpm.item()) for rpm in wheel_rpm_clamped[:, 1]],
-            device=robot.device,
-            dtype=torch.float32,
-        )  # [num_envs]
-        
-        total_wheel_power = wheel_power_left + wheel_power_right  # [num_envs] in Watts
-        
-        # ========== Total Energy Consumption ==========
-        # Total power = propeller power + wheel power
-        total_power = total_propeller_power + total_wheel_power  # [num_envs] in Watts
-        
-        # Energy per step = power * dt (Joules)
-        energy_per_step = total_power * dt  # [num_envs] in Joules
-        
-        # Scale to [-1, 0] using exponential transformation
-        # Scale factor: typical energy per step might be 0-50 Joules
-        # exp(-energy/scale) - 1 maps [0, inf] to [-1, 0]
-        # Using scale=20 means: 0J -> 0, 20J -> -0.63, 40J -> -0.86, 60J -> -0.95
-        scale = 20.0
-        scaled_penalty = torch.exp(-energy_per_step / scale) - 1.0  # [num_envs]
-        
-        return scaled_penalty
-        
-    except (ValueError, IndexError, KeyError) as e:
-        # If joints not found or energy model fails, return zero penalty
-        return torch.zeros(robot.num_instances, device=robot.device)
+    dt = env.step_dt  # Time per step in seconds
+    total_power = torch.zeros(robot.num_instances, device=robot.device, dtype=torch.float32)
+
+    joint_names = set(robot.joint_names)
+
+    # ========== Propeller Energy Consumption (optional) ==========
+    has_propellers = {"leftPropeller", "rightPropeller"}.issubset(joint_names)
+    if has_propellers:
+        try:
+            left_propeller_idx = robot.joint_names.index("leftPropeller")
+            right_propeller_idx = robot.joint_names.index("rightPropeller")
+            propeller_vels = robot.data.joint_vel[:, [left_propeller_idx, right_propeller_idx]]  # [num_envs, 2]
+
+            propeller_pwm = 1000.0 + (torch.abs(propeller_vels) / 500.0) * 650.0  # [num_envs, 2]
+            propeller_pwm = torch.clamp(propeller_pwm, min=1000.0, max=2000.0)
+
+            propeller_power_left = torch.tensor(
+                [pwm_to_thrust(pwm.item(), target="power") for pwm in propeller_pwm[:, 0]],
+                device=robot.device,
+                dtype=torch.float32,
+            )
+            propeller_power_right = torch.tensor(
+                [pwm_to_thrust(pwm.item(), target="power") for pwm in propeller_pwm[:, 1]],
+                device=robot.device,
+                dtype=torch.float32,
+            )
+            total_power += propeller_power_left + propeller_power_right
+        except (ValueError, IndexError, KeyError):
+            # Skip propeller contribution if lookup/model fails.
+            pass
+
+    # ========== Wheel Energy Consumption (optional) ==========
+    has_wheels = {"leftWheel", "rightWheel"}.issubset(joint_names)
+    if has_wheels:
+        try:
+            left_wheel_idx = robot.joint_names.index("leftWheel")
+            right_wheel_idx = robot.joint_names.index("rightWheel")
+            wheel_vels = robot.data.joint_vel[:, [left_wheel_idx, right_wheel_idx]]  # [num_envs, 2]
+
+            wheel_rpm = torch.abs(wheel_vels) * (60.0 / (2.0 * torch.pi))  # [num_envs, 2]
+            wheel_rpm_clamped = torch.clamp(wheel_rpm, min=0.0, max=300.0)
+
+            wheel_power_left = torch.tensor(
+                [rpm_to_power(rpm.item()) for rpm in wheel_rpm_clamped[:, 0]],
+                device=robot.device,
+                dtype=torch.float32,
+            )
+            wheel_power_right = torch.tensor(
+                [rpm_to_power(rpm.item()) for rpm in wheel_rpm_clamped[:, 1]],
+                device=robot.device,
+                dtype=torch.float32,
+            )
+            total_power += wheel_power_left + wheel_power_right
+        except (ValueError, IndexError, KeyError):
+            # Skip wheel contribution if lookup/model fails.
+            pass
+
+    # Energy per step = power * dt (Joules)
+    energy_per_step = total_power * dt  # [num_envs]
+
+    # Scale to [-1, 0] using exponential transformation.
+    scale = 20.0
+    scaled_penalty = torch.exp(-energy_per_step / scale) - 1.0
+    return scaled_penalty
 
 
 @configclass

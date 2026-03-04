@@ -373,13 +373,10 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
     """
 
     def _update_energy_tracking(self):
-        """Calculate instantaneous power from propellers and wheels, then accumulate energy.
+        """Calculate instantaneous actuator power and accumulate episode energy.
         
-        Uses the thrust_energy_model API to convert:
-        - Propeller PWM -> Power (W)
-        - Wheel RPM -> Power (W)
-        
-        Energy (J) = Power (W) * dt (s)
+        Works with both hybrid (wheels + propellers) and wheels-only configurations.
+        Each component is included only if the corresponding joints are present.
         """
         from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.thrust_energy_model import (
             pwm_to_thrust,
@@ -387,68 +384,58 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
         )
         
         robot = self.scene["robot"]
-        
-        # Get propeller and wheel joint velocities (radians/sec)
-        # Assuming joint ordering: [left_propeller, right_propeller, left_wheel, right_wheel]
-        joint_vel = robot.data.joint_vel  # [num_envs, num_joints]
-        
-        # Convert propeller velocities to PWM (assuming direct mapping or using action)
-        # For now, use joint velocity as proxy for PWM (scale appropriately)
-        # Note: You may need to adjust this based on your actuator model
-        # Assuming propellers are first 2 joints and wheels are last 2 joints
-        
-        try:
-            # Get propeller velocities (first 2 joints) - convert rad/s to PWM range
-            # Typical propeller: ~0-3000 rad/s maps to PWM 1000-2000
-            prop_left_vel = joint_vel[:, 0]  # rad/s
-            prop_right_vel = joint_vel[:, 1]  # rad/s
-            
-            # Map rad/s to PWM (linear approximation: 0 rad/s -> 1000 PWM, 3000 rad/s -> 2000 PWM)
-            pwm_left = 1000.0 + (prop_left_vel.abs() / 500.0).clamp(0, 1) * 650.0
-            pwm_right = 1000.0 + (prop_right_vel.abs() / 500.0).clamp(0, 1) * 650.0
-            
-            # Get wheel velocities (last 2 joints) - convert rad/s to RPM
-            wheel_left_vel = joint_vel[:, 2]  # rad/s
-            wheel_right_vel = joint_vel[:, 3]  # rad/s
-            
-            # Convert rad/s to RPM: RPM = (rad/s * 60) / (2 * pi)
-            rpm_left = (wheel_left_vel.abs() * 60.0 / (2.0 * 3.14159265359))
-            rpm_right = (wheel_right_vel.abs() * 60.0 / (2.0 * 3.14159265359))
-            
-            # Calculate power for each component (convert to numpy for API, then back to torch)
-            power_prop_left = torch.tensor([
-                pwm_to_thrust(pwm.item(), target="power") 
-                for pwm in pwm_left
-            ], device=self.device, dtype=torch.float32)
-            
-            power_prop_right = torch.tensor([
-                pwm_to_thrust(pwm.item(), target="power") 
-                for pwm in pwm_right
-            ], device=self.device, dtype=torch.float32)
-            
-            power_wheel_left = torch.tensor([
-                rpm_to_power(rpm.item()) 
-                for rpm in rpm_left
-            ], device=self.device, dtype=torch.float32)
-            
-            power_wheel_right = torch.tensor([
-                rpm_to_power(rpm.item()) 
-                for rpm in rpm_right
-            ], device=self.device, dtype=torch.float32)
-            
-            # Total instantaneous power (W) = sum of all components
-            total_power = power_prop_left + power_prop_right + power_wheel_left + power_wheel_right
-            
-            # Energy (J) = Power (W) * time (s)
-            energy_step = total_power * self.step_dt
-            
-            # Accumulate energy for this episode
-            self.episode_energy_buf += energy_step
-            
-        except Exception as e:
-            # If energy calculation fails, skip silently to avoid breaking training
-            # print(f"[WARNING] Energy tracking failed: {e}")
-            pass
+        total_power = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
+        joint_names = set(robot.joint_names)
+
+        # Optional propeller contribution.
+        if {"leftPropeller", "rightPropeller"}.issubset(joint_names):
+            try:
+                left_propeller_idx = robot.joint_names.index("leftPropeller")
+                right_propeller_idx = robot.joint_names.index("rightPropeller")
+                propeller_vels = robot.data.joint_vel[:, [left_propeller_idx, right_propeller_idx]]
+
+                propeller_pwm = 1000.0 + (torch.abs(propeller_vels) / 500.0) * 650.0
+                propeller_pwm = torch.clamp(propeller_pwm, min=1000.0, max=2000.0)
+
+                propeller_power_left = torch.tensor(
+                    [pwm_to_thrust(pwm.item(), target="power") for pwm in propeller_pwm[:, 0]],
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                propeller_power_right = torch.tensor(
+                    [pwm_to_thrust(pwm.item(), target="power") for pwm in propeller_pwm[:, 1]],
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                total_power += propeller_power_left + propeller_power_right
+            except (ValueError, IndexError, KeyError):
+                pass
+
+        # Optional wheel contribution.
+        if {"leftWheel", "rightWheel"}.issubset(joint_names):
+            try:
+                left_wheel_idx = robot.joint_names.index("leftWheel")
+                right_wheel_idx = robot.joint_names.index("rightWheel")
+                wheel_vels = robot.data.joint_vel[:, [left_wheel_idx, right_wheel_idx]]
+
+                wheel_rpm = torch.abs(wheel_vels) * (60.0 / (2.0 * torch.pi))
+                wheel_rpm_clamped = torch.clamp(wheel_rpm, min=0.0, max=300.0)
+
+                wheel_power_left = torch.tensor(
+                    [rpm_to_power(rpm.item()) for rpm in wheel_rpm_clamped[:, 0]],
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                wheel_power_right = torch.tensor(
+                    [rpm_to_power(rpm.item()) for rpm in wheel_rpm_clamped[:, 1]],
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                total_power += wheel_power_left + wheel_power_right
+            except (ValueError, IndexError, KeyError):
+                pass
+
+        self.episode_energy_buf += total_power * self.step_dt
 
     def _update_success_tracking(self):
         """Track if robot has reached the target successfully.
