@@ -144,11 +144,11 @@ class ActionsCfgWheelsServosOnly(ActionsCfg):
 
 
 @configclass
-class ActionsCfgWheelsServosOnly4D(ActionsCfg4D):
-    """4D action config with only wheels and propeller servos (no propeller velocity)."""
+class ActionsCfgPropellerServosOnly4D(ActionsCfg4D):
+    """4D action config with only propeller servos (no wheels, no propeller velocity)."""
 
-    propeller_vel = None
-
+    wheel_vel_left = None
+    wheel_vel_right = None
 
 @configclass
 class ActionsCfgWheelsOnly(ActionsCfg):

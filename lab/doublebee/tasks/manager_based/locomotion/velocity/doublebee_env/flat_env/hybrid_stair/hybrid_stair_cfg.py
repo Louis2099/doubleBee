@@ -20,7 +20,7 @@ from isaaclab.envs.mdp import randomize_actuator_gains
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.rewards import RewardsCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.stair_config import StairConfigCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.velocity_command import TerrainTargetDirectionCommandCfg
-from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfgWheelsOnly4D
+from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfgPropellerServosOnly4D
 
 
 # Note: Using RewardsCfg from mdp/rewards.py instead of local DoubleBeeRewardsCfg
@@ -214,7 +214,7 @@ class DoubleBeeHybridStairCfg(DoubleBeeVelocityEnvCfg):
     events: DoubleBeeEventsCfg = DoubleBeeEventsCfg()
 
     # 4D wheels-only action space: differential wheel velocities only.
-    actions: ActionsCfgWheelsOnly4D = ActionsCfgWheelsOnly4D()
+    actions: ActionsCfgPropellerServosOnly4D = ActionsCfgPropellerServosOnly4D()
     
     # Provide (optional) task-specific constraint terms override if needed in future
 
