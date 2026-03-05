@@ -10,7 +10,7 @@ import isaaclab.envs.mdp as mdp
 from isaaclab.utils import configclass
 
 # ±45° in rad, for servo position scale so that policy [-1, 1] → [-45°, 45°]
-SERVO_POS_LIMIT_RAD = math.pi / 2  # 1.57 rad
+SERVO_POS_LIMIT_RAD = math.pi / 3  # 1.57 rad
 
 
 @configclass

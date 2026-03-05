@@ -590,10 +590,10 @@ class RewardsCfg:
     Computes penalty based on propeller joint velocities, scaled to [-1, 0] using e^(-x) - 1.
     Since thrust ∝ ω², high speeds are inefficient."""
     
-    # energy_consumption = RewTerm(
-    #     func=penalize_energy_consumption,
-    #     weight=0.05,
-    # )
+    energy_consumption = RewTerm(
+        func=penalize_energy_consumption,
+        weight=0.05,
+    )
     """Penalty for total energy consumption from propellers and wheels.
     Uses PWM-to-Power model for propellers and RPM-to-Power model for wheels.
     Computes total power (W) and multiplies by dt to get energy per step (J).
