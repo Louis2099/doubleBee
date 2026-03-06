@@ -673,16 +673,19 @@ def main():
             # Note: Actions are already bounded to [-1, 1] by tanh activation in actor network
             obs, _, _, extras = env.step(actions)
 
-        # Log raw policy input (obs) and output (actions) for env 0 to CSV
+        # Log raw policy input (obs), output (actions), and total thrust magnitude for env 0 to CSV
         if policy_io_file is not None and policy_input.shape[0] > 0:
             o = policy_input[0].detach().cpu().numpy()
             a = actions[0].detach().cpu().numpy()
+            total_thrust = ""
+            if getattr(env.unwrapped, "_last_propeller_thrust_total", None) is not None:
+                total_thrust = env.unwrapped._last_propeller_thrust_total[0].item()
             if not policy_io_header_written:
-                header = ["step"] + [f"obs_{i}" for i in range(len(o))] + [f"action_{i}" for i in range(len(a))]
+                header = ["step"] + [f"obs_{i}" for i in range(len(o))] + [f"action_{i}" for i in range(len(a))] + ["total_thrust"]
                 policy_io_writer = csv.writer(policy_io_file)
                 policy_io_writer.writerow(header)
                 policy_io_header_written = True
-            policy_io_writer.writerow([timestep] + o.tolist() + a.tolist())
+            policy_io_writer.writerow([timestep] + o.tolist() + a.tolist() + [total_thrust])
         
         # Update target visualizer if enabled
         if target_visualizer is not None:

@@ -246,6 +246,9 @@ def apply_propeller_aerodynamics(
         body_ids=None  # Apply to all bodies (forces are zero except for propellers)
     )
 
+    # Store total thrust magnitude per env (sum over propellers) for logging (e.g. play.py policy I/O)
+    env._last_propeller_thrust_total = thrust_magnitude.sum(dim=1)
+
     # Optional: visualize thrust vectors in the viewport (disabled by default; carb.plugins not in all Isaac builds)
     if visualize:
         # Only attempt once; after failure disable to avoid console spam
