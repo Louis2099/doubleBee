@@ -20,7 +20,7 @@ from isaaclab.envs.mdp import randomize_actuator_gains
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.rewards import RewardsCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.stair_config import StairConfigCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.velocity_command import TerrainTargetDirectionCommandCfg
-from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfgPropellerServosOnly4D
+from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfg4D, ActionsCfgPropellerServosOnly4D
 
 
 # Note: Using RewardsCfg from mdp/rewards.py instead of local DoubleBeeRewardsCfg
@@ -213,9 +213,9 @@ class DoubleBeeHybridStairCfg(DoubleBeeVelocityEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     events: DoubleBeeEventsCfg = DoubleBeeEventsCfg()
 
-    # 4D wheels-only action space: differential wheel velocities only.
+    # 4D action space: wheels (2) + servo (1) + propeller (1). Servos and propellers active.
     actions: ActionsCfgPropellerServosOnly4D = ActionsCfgPropellerServosOnly4D()
-    
+
     # Provide (optional) task-specific constraint terms override if needed in future
 
     def __post_init__(self):
@@ -265,6 +265,12 @@ class DoubleBeeHybridStairCfg_PLAY(DoubleBeeHybridStairCfg):
         # Call parent post_init
         super().__post_init__()
         
+        # Override terrain to use simplified PLAY terrain with only 2 gentle stairs
+        from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.stair_config import StairConfigCfg_PLAY
+        stair_config_play = StairConfigCfg_PLAY()
+        self.scene.terrain = stair_config_play.stair_terrain
+        print("[INFO] Using simplified stair terrain for play mode - only 2 gentle stairs, shorter distance.")
+        
         # Disable observation noise for evaluation
         if hasattr(self.observations, 'policy'):
             if hasattr(self.observations.policy, 'enable_corruption'):
@@ -279,7 +285,6 @@ class DoubleBeeHybridStairCfg_PLAY(DoubleBeeHybridStairCfg):
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         
         print("[INFO] Using aligned initialization for play mode - start/end points aligned, robot faces target.")
-
 
 
 # python scripts/co_rl/train.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --algo ppo --num_envs 4096 --headless --num_policy_stacks 2 --num_critic_stacks 2
