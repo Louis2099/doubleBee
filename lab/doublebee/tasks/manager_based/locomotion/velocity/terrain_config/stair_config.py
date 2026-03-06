@@ -82,19 +82,19 @@ STAIR_TERRAINS_CFG_PLAY = TerrainGeneratorCfg(
             border_width=0.5,
             flat_patch_sampling={
                 "init_pos": FlatPatchSamplingCfg(
-                    num_patches=3,  # Fewer patches needed for simpler terrain
-                    patch_radius=0.25,  # Slightly larger patches for easier spawning
-                    x_range=(-0.8, 0.8),  # Narrower range to keep robot on platform
-                    y_range=(-0.8, 0.8),
-                    z_range=(-0.5, 0.5),
-                    max_height_diff=0.1,  # Flatter spawn area
+                    num_patches=5,  # Fewer patches needed for simpler terrain
+                    patch_radius=0.2,  # Slightly larger patches for easier spawning
+                    x_range=(-1.0, 1.0),  # Narrower range to keep robot on platform
+                    y_range=(-1.0, 1.0),
+                    z_range=(-1.0, 1.0),
+                    max_height_diff=0.15,  # Flatter spawn area
                 ),
                 "target": FlatPatchSamplingCfg(
-                    num_patches=3,  # Fewer target options
-                    patch_radius=0.25,
-                    x_range=(-2.0, 2.0),  # Shorter distance to target
-                    y_range=(-2.0, 2.0),
-                    z_range=(0.1, 0.3),  # Target on stairs (~2 steps up: 2 * 0.08 = 0.16m)
+                    num_patches=5,  # Fewer target options
+                    patch_radius=0.2,
+                    x_range=(-4.0, 4.0),  # Shorter distance to target
+                    y_range=(-4.0, 4.0),
+                    z_range=(0.0, 0.3),  # Target on stairs (~2 steps up: 2 * 0.08 = 0.16m)
                     max_height_diff=0.1,
                 ),
             },
