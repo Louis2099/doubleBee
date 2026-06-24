@@ -133,7 +133,8 @@ class OffPolicyRunner:
                 # These new variables are in self.env.device (mostly in cuda:0)
 
                 if "time_outs" in infos:
-                    indices_to_update = (dones & infos["time_outs"]).nonzero(as_tuple=True)[0]
+                    timeout_mask = infos["time_outs"].bool()
+                    indices_to_update = (dones.bool() & timeout_mask).nonzero(as_tuple=True)[0]
                     dones[indices_to_update] = 0
 
                 # process the step
@@ -150,7 +151,8 @@ class OffPolicyRunner:
                         ep_infos.append(infos["log"])
                     cur_reward_sum += rewards
                     cur_episode_length += 1
-                    new_ids = (dones > 0).nonzero(as_tuple=False)
+                    reset_mask = (dones > 0) | (timeout_mask if "time_outs" in infos else torch.zeros_like(dones).bool())
+                    new_ids = reset_mask.nonzero(as_tuple=False)
                     rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
                     lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
                     cur_reward_sum[new_ids] = 0
@@ -163,7 +165,7 @@ class OffPolicyRunner:
                 start = stop
 
             if self.total_steps > self.alg.update_after:
-                self.alg.update(update_cnt=self.num_steps_per_env * self.env.num_envs)
+                self.alg.update(update_cnt=self.num_steps_per_env) # * self.env.num_envs
 
             stop = time.time()
             learn_time = stop - start

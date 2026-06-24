@@ -147,13 +147,19 @@ class PPO:
                     if kl_mean > self.desired_kl * 2.0:
                         self.learning_rate = max(1e-5, self.learning_rate / 1.5)
                     elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
-                        self.learning_rate = min(1e-2, self.learning_rate * 1.5)
+                        self.learning_rate = min(1e-3, self.learning_rate * 1.5)
 
                     for param_group in self.optimizer.param_groups:
                         param_group["lr"] = self.learning_rate
 
             # Surrogate loss
-            ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
+            # ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
+            
+            # fix - clamp the exponent so exp can't overflow:
+            log_ratio = actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch)
+            log_ratio = torch.clamp(log_ratio, min=-20.0, max=20.0) # exp(20) is large but finite
+            ratio = torch.exp(log_ratio)
+
             surrogate = -torch.squeeze(advantages_batch) * ratio
             surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(
                 ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
