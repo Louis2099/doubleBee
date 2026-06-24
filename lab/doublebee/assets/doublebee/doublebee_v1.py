@@ -13,8 +13,8 @@ from lab.doublebee.assets.doublebee import DOUBLEBEE_ASSETS_DATA_DIR
 
 DOUBLEBEE_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        # usd_path=f"{DOUBLEBEE_ASSETS_DATA_DIR}/Robots/DoubleBee/doubleBee_modified.usd",
-        usd_path=f"{DOUBLEBEE_ASSETS_DATA_DIR}/Robots/DoubleBee/doubleBee_original.usd",
+        usd_path=f"{DOUBLEBEE_ASSETS_DATA_DIR}/Robots/DoubleBee/doubleBee_modified.usd",
+        # usd_path=f"{DOUBLEBEE_ASSETS_DATA_DIR}/Robots/DoubleBee/doubleBee_original.usd",
         activate_contact_sensors=True,
         visible=True,  # Ensure visibility is enabled
         # scale=(1.0, 1.0, 1.0),  # Convert cm to meters (USD was created in cm)

@@ -8,3 +8,5 @@
 from .co_rl_cfg import DoubleBeeCoRlCfg
 
 __all__ = ["DoubleBeeCoRlCfg"]
+from . import co_rl_tqc_cfg
+from . import co_rl_sac_cfg

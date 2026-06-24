@@ -49,8 +49,12 @@ def parse_co_rl_cfg(task_name: str, args_cli: argparse.Namespace) -> CoRlPolicyR
     """
     from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
-    # load the default configuration
-    corl_cfg: CoRlPolicyRunnerCfg = load_cfg_from_registry(task_name, "co_rl_cfg_entry_point")
+    algo = getattr(args_cli, "algo", "ppo")
+    try:
+        corl_cfg: CoRlPolicyRunnerCfg = load_cfg_from_registry(task_name, f"co_rl_{algo}_cfg_entry_point")
+    except (KeyError, ValueError):
+        # load the default configuration
+        corl_cfg = load_cfg_from_registry(task_name, "co_rl_cfg_entry_point")
     corl_cfg = update_co_rl_cfg(corl_cfg, args_cli)
     return corl_cfg
 

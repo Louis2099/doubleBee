@@ -90,6 +90,7 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
+# torch.autograd.set_detect_anomaly(True)
 
 def main():
     """Train with CO-RL agent."""

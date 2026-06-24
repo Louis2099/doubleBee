@@ -18,6 +18,7 @@ from .velocity_env_cfg import DoubleBeeVelocityEnvCfg
 
 # Register DoubleBee velocity control tasks (hybrid: propeller + wheel on staircase)
 gym.register(
+    # TODO: remove ppo from the naming
     id="Isaac-Velocity-HybridStair-DoubleBee-v1-ppo",
     # entry_point="isaaclab.envs:ManagerBasedRLEnv",
     entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
@@ -25,6 +26,8 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": DoubleBeeHybridStairCfg,
         "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
     },
 )
 
@@ -33,8 +36,11 @@ gym.register(
     entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
     disable_env_checker=True,
     kwargs={
+        # TODO: remove ppo from the naming
         "env_cfg_entry_point": DoubleBeeHybridStairCfg_PLAY,
         "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
     },
 )
 
