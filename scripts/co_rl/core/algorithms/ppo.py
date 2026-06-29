@@ -155,7 +155,7 @@ class PPO:
             # Surrogate loss
             # ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
             
-            # fix - clamp the exponent so exp can't overflow:
+            # clamp the exponent so exp can't overflow:
             log_ratio = actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch)
             log_ratio = torch.clamp(log_ratio, min=-20.0, max=20.0) # exp(20) is large but finite
             ratio = torch.exp(log_ratio)
