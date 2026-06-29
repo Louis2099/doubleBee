@@ -15,6 +15,7 @@ from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import RayCaster, ContactSensor
 from isaaclab.utils import configclass
+from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -290,19 +291,22 @@ class ObservationsCfg:
         wheel_vel = ObsTerm(
             func=wheel_velocities,
             scale=0.05,  # Scale down wheel velocities (typ. 0-200 rad/s)
+            noise=Unoise(n_min=-1.5, n_max=1.5),
         )
         
         # Servo positions - Critical for propeller orientation control
-        # servo_pos = ObsTerm(
-        #     func=servo_positions,
-        #     # No scaling needed, positions are already in [-1.57, 1.57] (±90°)
-        # )
+        servo_pos = ObsTerm(
+            func=servo_positions,
+            # No scaling needed, positions are already in [-1.57, 1.57] (±90°)
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+        )
         
         # Propeller velocities - For thrust generation feedback
-        # propeller_vel = ObsTerm(
-        #     func=propeller_velocities,
-        #     scale=0.01,  # Scale down high propeller speeds (typ. 0-600 rad/s)
-        # )
+        propeller_vel = ObsTerm(
+            func=propeller_velocities,
+            scale=0.01,  # Scale down high propeller speeds (typ. 0-600 rad/s)
+            noise=Unoise(n_min=-1.5, n_max=1.5),
+        )
 
         # ========================================
         # 2. Base State (Robot body motion)
@@ -312,17 +316,20 @@ class ObservationsCfg:
         base_lin_vel = ObsTerm(
             func=base_lin_vel,
             scale=2.0,  # Emphasize linear velocity for tracking
+            noise=Unoise(n_min=-0.1, n_max=0.1),
         )
         
         # Angular velocity in body frame - For rotation control
         base_ang_vel = ObsTerm(
             func=mdp.base_ang_vel, 
             scale=0.25,  # Reduce magnitude of angular velocity
+            noise=Unoise(n_min=-0.2, n_max=0.2),
         )
         
         # Projected gravity - Encodes robot orientation (roll, pitch)
         base_projected_gravity = ObsTerm(
             func=mdp.projected_gravity,
+            noise=Unoise(n_min=-0.05, n_max=0.05),
         )
 
         # ========================================
@@ -330,14 +337,15 @@ class ObservationsCfg:
         # ========================================
         
         # Height scan - 6x6 grid showing terrain elevation around robot
-        # height_scan = ObsTerm(
-        #     func=height_scan,
-        #     params={
-        #         "sensor_cfg": SceneEntityCfg("height_scanner"),
-        #         "offset": 0.0,  # No offset, raw heights
-        #     },
-        #     clip=(-1.0, 1.0),  # Clip to reasonable height range
-        # )
+        height_scan = ObsTerm(
+            func=height_scan,
+            params={
+                "sensor_cfg": SceneEntityCfg("height_scanner"),
+                "offset": 0.0,  # No offset, raw heights
+            },
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+            clip=(-1.0, 1.0),  # Clip to reasonable height range
+        )
         
         # Wheel contact - Binary indicator if wheels touch ground
         wheel_ground_contact = ObsTerm(

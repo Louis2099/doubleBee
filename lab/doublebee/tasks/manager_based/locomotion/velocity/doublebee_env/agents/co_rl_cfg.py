@@ -44,6 +44,7 @@ class DoubleBeeCoRlCfg(CoRlPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
+    # num_steps_per_env: int = 8 # for larger envs > 512, use 24
     num_steps_per_env: int = 24
 
     # Training settings

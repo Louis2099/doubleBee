@@ -217,8 +217,13 @@ class TerrainTargetDirectionCommand(UniformVelocityCommand):
         # Since the robot is symmetric, facing the target backwards (abs(theta)=π) is equivalent to facing forward (theta=0)
         # Error should be: 0 at theta=0 or abs(theta)=π, and ±1 at abs(theta)=π/2
         # Using sin(angle_error) achieves this: sin(0)=0, sin(π/2)=1, sin(π)=0, sin(-π/2)=-1, sin(-π)=0
-        ang_vel_z_command = torch.sin(angle_error)  # [num_envs]
+        # ang_vel_z_command = torch.sin(angle_error)  # [num_envs]
         
+        # Monotonic heading error, normalized to [-1, 1]. Zero ONLY when facing target.
+        # Unlike sin(angle_error), facing backwards (±π) now yields maximum turn signal (±1),
+        # removing the stable backwards-facing equilibrium that caused circling/yaw-dancing.
+        ang_vel_z_command = angle_error / torch.pi
+
         # Set normalized direction as XY velocity command
         # Use 3D format to match original training: [lin_vel_x, lin_vel_y, ang_vel_z]
         self.vel_command_b[:, 0] = direction_x_body  # lin_vel_x in body frame
