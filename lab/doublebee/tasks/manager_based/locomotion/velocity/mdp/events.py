@@ -618,6 +618,73 @@ def reset_root_state_from_terrain(
     asset.write_root_link_pose_to_sim(torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
     asset.write_root_com_velocity_to_sim(velocities, env_ids=env_ids)
 
+def reset_root_state_climb_commit_mix(
+    env,
+    env_ids,
+    pose_range,
+    velocity_range,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    align_axis: str = "x",
+    frac_commit: float = 0.4,     # 40% spawned at step base, 60% normal
+    nudge_frac: float = 0.75,     # slide 75% of the way from spawn toward target
+    commit_pitch: float = 0.15,   # gentle forward pitch (rad) into the climb
+):
+    """Wrapper around reset_root_state_from_terrain_aligned.
+    For a fraction of envs, slides the spawn toward the step base along the climb
+    axis and adds a gentle forward pitch, so those episodes START at the climb
+    (drilling the prop-assist commit) instead of after a long approach.
+    Stays on the aligned reset's Z (valid terrain height) — no spawning into geometry."""
+    # 1) Normal aligned reset for ALL envs (sets pose, velocities, target buffer)
+    reset_root_state_from_terrain_aligned(
+        env, env_ids, pose_range, velocity_range, asset_cfg, align_axis
+    )
+
+    n = len(env_ids)
+    k = int(frac_commit * n)
+    if k == 0:
+        return
+
+    asset = env.scene[asset_cfg.name]
+
+    # 2) Pick which envs become "commit" spawns
+    perm = torch.randperm(n, device=env.device)[:k]
+    commit_env = env_ids[perm]
+
+    # 3) Read the just-set pose for those envs
+    pose = asset.data.root_link_state_w[commit_env, :7].clone()  # [k,7]
+    pos = pose[:, 0:3]
+    quat = pose[:, 3:7]
+
+    # 4) Slide toward the target (step base) along climb axis; keep Z
+    targets = env._aligned_targets_buffer[commit_env, :]  # [k,3] world
+    to_target_xy = targets[:, :2] - pos[:, :2]
+    pos[:, :2] = pos[:, :2] + nudge_frac * to_target_xy
+    # Z left as aligned reset set it (valid terrain height)
+
+    # 5) Rebuild orientation with yaw (face target) AND forward pitch together,
+    #    so pitch is applied in the correct (pre-yaw) frame — not multiplied onto
+    #    the already-yawed quat (which tilts it off-axis).
+    # extract current yaw from the aligned-reset quat
+    # quat is [w,x,y,z]; get yaw via atan2
+    w, x, y, z = quat[:,0], quat[:,1], quat[:,2], quat[:,3]
+    yaw = torch.atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))   # extract yaw from the quat — CORRECT
+    roll_slot = torch.full((k,), commit_pitch, device=env.device)
+    pitch_slot = torch.zeros(k, device=env.device)
+    quat_new = math_utils.quat_from_euler_xyz(roll_slot, pitch_slot, yaw)
+
+    new_pose = torch.cat([pos, quat_new], dim=-1)
+    asset.write_root_link_pose_to_sim(new_pose, env_ids=commit_env)
+    zero_vel = torch.zeros(k, 6, device=env.device)
+    asset.write_root_com_velocity_to_sim(zero_vel, env_ids=commit_env)
+
+    left_prop_id = asset.find_joints("leftPropeller")[0][0]
+    right_prop_id = asset.find_joints("rightPropeller")[0][0]
+    prop_ids = [left_prop_id, right_prop_id]
+    current_prop_pos = asset.data.joint_pos[commit_env][:, prop_ids]
+    zero_prop_vel = torch.zeros(k, len(prop_ids), device=env.device)
+    asset.write_joint_state_to_sim(
+        current_prop_pos, zero_prop_vel, joint_ids=prop_ids, env_ids=commit_env
+    )
 
 def reset_root_state_from_terrain_aligned(
     env: ManagerBasedEnv,
@@ -654,6 +721,10 @@ def reset_root_state_from_terrain_aligned(
     asset: RigidObject | Articulation = env.scene[asset_cfg.name]
     terrain: TerrainImporter = env.scene.terrain
 
+    # if hasattr(terrain.cfg.terrain_generator.sub_terrains["hf_pyramid_stair_inv"], "step_height_range"):
+    #     # the per-tile difficulty determines actual height
+    #     print("[STEP HEIGHTS] difficulty per row:", terrain.terrain_levels.unique().tolist())
+
     # obtain all flat patches corresponding to the valid poses
     valid_positions: torch.Tensor = terrain.flat_patches.get("init_pos")
     if valid_positions is None:
@@ -670,6 +741,14 @@ def reset_root_state_from_terrain_aligned(
             f" Found: {list(terrain.flat_patches.keys())}"
         )
 
+    #if target_positions is not None:
+    #    print(f"[DEBUG terrain] target_patches shape: {target_positions.shape}")
+    #    print(f"[DEBUG terrain] target_patches: {target_positions}")
+    
+    #if valid_positions is not None:
+    #    print(f"[DEBUG terrain] init_patches shape: {valid_positions.shape}")
+    #    print(f"[DEBUG terrain] init_patches: {valid_positions}")
+
     # Get terrain info for each environment
     terrain_levels = terrain.terrain_levels[env_ids]  # [len(env_ids)]
     terrain_types = terrain.terrain_types[env_ids]    # [len(env_ids)]
@@ -679,6 +758,10 @@ def reset_root_state_from_terrain_aligned(
     positions = torch.zeros(len(env_ids), 3, device=env.device)
     orientations = torch.zeros(len(env_ids), 4, device=env.device)
     
+    # print(f"[ORIGIN SPREAD] unique levels: {terrain.terrain_levels.unique().tolist()} | "
+    #     f"unique types: {terrain.terrain_types.unique().tolist()} | "
+    #     f"origin range x: {env.scene.env_origins[:,0].min().item():.1f} to {env.scene.env_origins[:,0].max().item():.1f}")
+
     # Process each environment individually to ensure alignment
     for i, env_idx in enumerate(env_ids):
         level = terrain_levels[i].item()
@@ -687,6 +770,14 @@ def reset_root_state_from_terrain_aligned(
         
         # Get available patches for this environment's terrain type
         init_patches = valid_positions[level, ttype, :, :]  # [num_init_patches, 3]
+
+        # print(f"[FRAME CHECK] level={level} ttype={ttype} env_origin={env_origin.tolist()} init_patch[0]={init_patches[0].tolist()}")
+
+        # add temporarily in your play script, right after env is created
+        # terrain = env.unwrapped.scene.terrain
+        # print("Terrain origins shape:", terrain.terrain_origins.shape)
+        # print("Terrain origins Z (all rows):", terrain.terrain_origins[:, :, 2])
+
         target_patches = target_positions[level, ttype, :, :]  # [num_target_patches, 3]
         
         num_init = init_patches.shape[0]
@@ -696,7 +787,7 @@ def reset_root_state_from_terrain_aligned(
             # Fallback: use random position if no patches available
             if num_init > 0:
                 patch_idx = int(torch.randint(0, num_init, (1,), device=env.device).item())
-                positions[i, :] = init_patches[patch_idx, :] + env_origin
+                positions[i, :] = init_patches[patch_idx, :] # + env_origin
             else:
                 positions[i, :] = env_origin
             # Default orientation (no rotation)
@@ -706,32 +797,41 @@ def reset_root_state_from_terrain_aligned(
         # Sample a random start position
         init_idx = int(torch.randint(0, num_init, (1,), device=env.device).item())
         start_pos_relative = init_patches[init_idx, :]  # [3]
-        start_pos_world = start_pos_relative + env_origin  # [3]
+        start_pos_world = start_pos_relative # + env_origin  # [3]
         
         # Find target patches that align with start position on the specified axis
         if align_axis == "x":
             # Align on X axis: find targets with same X coordinate (within tolerance)
             start_x = start_pos_world[0].item()
-            target_x_coords = target_patches[:, 0] + env_origin[0]  # [num_target_patches]
+            target_x_coords = target_patches[:, 0] # + env_origin[0]  # [num_target_patches]
             # Find targets within 0.5m of start X coordinate
-            aligned_mask = torch.abs(target_x_coords - start_x) < 0.5
+            aligned_mask = torch.abs(target_x_coords - start_x) < 0.5 # was 1.0
             aligned_targets = target_patches[aligned_mask, :]
         else:  # align_axis == "y"
             # Align on Y axis: find targets with same Y coordinate (within tolerance)
             start_y = start_pos_world[1].item()
-            target_y_coords = target_patches[:, 1] + env_origin[1]  # [num_target_patches]
+            target_y_coords = target_patches[:, 1] # + env_origin[1]  # [num_target_patches]
             # Find targets within 0.5m of start Y coordinate
-            aligned_mask = torch.abs(target_y_coords - start_y) < 0.5
+            aligned_mask = torch.abs(target_y_coords - start_y) < 0.5 # was 1.0
             aligned_targets = target_patches[aligned_mask, :]
         
         # If no aligned targets found, use all targets (fallback)
         if aligned_targets.shape[0] == 0:
+        #     print("DEBUG: no aligned target found")
+        #     print(f"  start_pos_world: {start_pos_world}")
+        #     print(f"  init_patches (relative): {init_patches}")
+        #     print(f"  target_patches (relative): {target_patches}")
+        #     print(f"  env_origin: {env_origin}")
             aligned_targets = target_patches
         
         # Sample a random aligned target
-        target_idx = int(torch.randint(0, aligned_targets.shape[0], (1,), device=env.device).item())
+        # target_idx = int(torch.randint(0, aligned_targets.shape[0], (1,), device=env.device).item())
+        # target_pos_relative = aligned_targets[target_idx, :]  # [3]
+        # Pick the NEAREST aligned target (not random) — prevents facing a far/wrong target
+        d = torch.norm(aligned_targets[:, :2] - start_pos_relative[:2].unsqueeze(0), dim=1)
+        target_idx = int(torch.argmin(d).item())
         target_pos_relative = aligned_targets[target_idx, :]  # [3]
-        target_pos_world = target_pos_relative + env_origin  # [3]
+        target_pos_world = target_pos_relative # + env_origin  # [3]
         
         # Force exact alignment on the specified axis
         if align_axis == "x":
@@ -739,8 +839,11 @@ def reset_root_state_from_terrain_aligned(
         else:  # align_axis == "y"
             target_pos_world[1] = start_pos_world[1]
         
+        # print(f"[ALIGN] start_x={start_pos_world[0].item():.3f} "
+                # f"target_x_after_force={target_pos_world[0].item():.3f}", flush=True)
+        
         # Add height offset to target (for visualization)
-        target_pos_world[2] += 0.3
+        target_pos_world[2] += 0.1
         
         # Store the aligned target position for later application
         # CRITICAL: We cannot set the target here because command_manager.reset() hasn't run yet.
@@ -751,7 +854,7 @@ def reset_root_state_from_terrain_aligned(
         env._aligned_targets_buffer[env_idx, :] = target_pos_world
         
         # Set robot position
-        robot_height_offset = 0.30
+        robot_height_offset = 0.05
         positions[i, :] = start_pos_world
         positions[i, 2] += robot_height_offset
         
@@ -760,12 +863,17 @@ def reset_root_state_from_terrain_aligned(
         direction_w = target_pos_world - positions[i, :]  # [3]
         direction_xy = direction_w[:2]  # [2] - XY only
         
+        # print(f"[YAW DEBUG] env={env_idx.item()} start={start_pos_world[:2].tolist()} "
+        # f"target={target_pos_world[:2].tolist()} dir_xy={direction_xy.tolist()} "
+        # f"yaw_deg={torch.rad2deg(torch.atan2(direction_xy[0], direction_xy[1])).item():.1f} "
+        # f"origin={env_origin[:2].tolist()}")
+        
         # Compute yaw angle to face target
         # NOTE: DoubleBee robot faces along +Y axis in body frame (not +X)
         # atan2(x, y) gives angle from +Y axis to vector [x, y]
         # This is the correct yaw angle for a robot that faces +Y
-        # yaw = torch.atan2(direction_xy[0], direction_xy[1])  # Angle from +Y axis in XY plane
-        yaw = torch.tensor(0, device=env.device)
+        yaw = torch.atan2(direction_xy[0], direction_xy[1])  # Angle from +Y axis in XY plane
+        # yaw = torch.tensor(0, device=env.device)
         # yaw = torch.atan2(direction_xy[1], direction_xy[0])
 
 
@@ -808,6 +916,14 @@ def reset_root_state_from_terrain_aligned(
     asset.write_root_link_pose_to_sim(torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
     asset.write_root_com_velocity_to_sim(velocities, env_ids=env_ids)
 
+    left_prop_id = asset.find_joints("leftPropeller")[0][0]
+    right_prop_id = asset.find_joints("rightPropeller")[0][0]
+    prop_ids = [left_prop_id, right_prop_id]
+    current_prop_pos = asset.data.joint_pos[env_ids][:, prop_ids]
+    zero_prop_vel = torch.zeros(len(env_ids), len(prop_ids), device=env.device)
+    asset.write_joint_state_to_sim(
+        current_prop_pos, zero_prop_vel, joint_ids=prop_ids, env_ids=env_ids
+    )
 
 def apply_aligned_targets_to_command_manager(
     env: ManagerBasedEnv,

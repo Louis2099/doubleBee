@@ -20,87 +20,187 @@ STAIR_TERRAINS_CFG = TerrainGeneratorCfg(
     seed=42,
     size=(10.0, 10.0),
     border_width=2.0,
-    num_rows=1,
-    num_cols=1,
+    # num_rows=1,
+    # num_cols=1,
+    num_rows=5,        # 5 difficulty levels
+    num_cols=5,        # 5 variations per level
+    curriculum=True,   # difficulty increases by row
+    # difficulty_range=(0.0, 1.0),
     color_scheme="random",
     horizontal_scale=0.1,
     vertical_scale=0.005,
     slope_threshold=0.5,
-    difficulty_range=(0.01, 0.7),
-    use_cache=True,
+    # difficulty_range=(0.01, 0.7),
+    difficulty_range=(0.0, 1.0),
+    # use_cache=True,
+    use_cache=False,
     sub_terrains={
         "hf_pyramid_stair_inv": terrain_gen.HfPyramidStairsTerrainCfg(
             inverted=True,
             proportion=1.0,
-            step_height_range=(0.01, 0.18),
+            # step_height_range=(0.01, 0.18),
+            # step_height_range=(0.01, 0.12),
+            # step_height_range=(0.03, 0.12),
+            # step_height_range=(0.03, 0.09),
+            step_height_range=(0.04, 0.07),   # narrower range centered around 5-7cm
             step_width=0.4,
-            platform_width=4.0,     # ⟵ was 2.5; larger flat bottom area
+            platform_width=3.0,     # ⟵ was 2.5; larger flat bottom area
             border_width=1.0,
             flat_patch_sampling={
                 "init_pos": FlatPatchSamplingCfg(
-                    num_patches=5,
-                    patch_radius=0.2,    # keep as-is; now fits more comfortably on the larger platform
-                    x_range=(-1.0, 1.0), # centered search stays well inside the new 4 m platform
-                    y_range=(-1.0, 1.0),
-                    z_range=(-1.0, 1.0),
+                    num_patches=8,
+                    patch_radius=0.05,    # keep as-is; now fits more comfortably on the larger platform
+                    # x_range=(-1.0, 1.0), # centered search stays well inside the new 4 m platform
+                    # y_range=(-1.0, 1.0),
+                    # z_range=(-1.0, 1.0),
+                    x_range=(-0.5, 0.5),
+                    y_range=(-0.5, 0.5),
+                    z_range=(-0.5, 0.5),
                     max_height_diff=0.15,
                 ),
                 "target": FlatPatchSamplingCfg(
                     num_patches=5,
-                    patch_radius=0.2,
-                    x_range=(-5.0, 5.0),
-                    y_range=(-5.0, 5.0),
-                    z_range=(0.0, 1.0),
-                    max_height_diff=0.15,
+                    patch_radius=0.1,
+                    # x_range=(-5.0, 5.0),
+                    # y_range=(-5.0, 5.0),
+                    # z_range=(0.0, 1.0),
+                    x_range=(-1.0, 1.0),  # narrow - same corridor as spawn
+                    # y_range=(0.5, 4.0),   # wider — from close (0.5m) to far (4m)
+                    # z_range=(0.0, 0.20),  # wider — from flat (0.0) to multi-step (0.20)# CHANGED: was (0.03, 0.20) — now includes flat-ground targets too
+                    y_range=(1.5, 3.2),
+                    z_range=(0.03, 0.20),
+                    max_height_diff=0.25,
                 ),
             },
         ),
     },
 )
 """Stair terrain generator configuration for training."""
-
-
 STAIR_TERRAINS_CFG_PLAY = TerrainGeneratorCfg(
     seed=42,
-    size=(6.0, 6.0),  # Smaller terrain for simpler task
-    border_width=1.5,
+    size=(10.0, 10.0),
+    border_width=2.0,
     num_rows=1,
     num_cols=1,
+    curriculum=True,
     color_scheme="random",
     horizontal_scale=0.1,
     vertical_scale=0.005,
     slope_threshold=0.5,
-    difficulty_range=(0.0, 0.2),  # Much lower difficulty
-    use_cache=False,  # Disable cache for play mode to allow easier regeneration
+    # formula used, step_height = step_min + difficulty * (step_max - step_min)
+    # difficulty_range=(0.10, 0.24), # 4cm
+    difficulty_range=(0.26, 0.40), # 5cm
+    # difficulty_range=(0.43, 0.57), # 6cm
+    # difficulty_range=(0.60, 0.74), # 7cm
+    use_cache=False,
     sub_terrains={
         "hf_pyramid_stair_inv": terrain_gen.HfPyramidStairsTerrainCfg(
             inverted=True,
             proportion=1.0,
-            step_height_range=(0.05, 0.08),  # Only 5-8cm steps (gentle stairs)
-            step_width=0.5,  # Wider steps for easier climbing
-            platform_width=2.5,  # Smaller platform since terrain is smaller
-            border_width=0.5,
+            step_height_range=(0.03, 0.09),  # MATCH TRAINING exactly
+            step_width=0.4,
+            platform_width=3.0,
+            border_width=1.0,
             flat_patch_sampling={
                 "init_pos": FlatPatchSamplingCfg(
-                    num_patches=5,  # Fewer patches needed for simpler terrain
-                    patch_radius=0.2,  # Slightly larger patches for easier spawning
-                    x_range=(-1.0, 1.0),  # Narrower range to keep robot on platform
-                    y_range=(-1.0, 1.0),
-                    z_range=(-1.0, 1.0),
-                    max_height_diff=0.15,  # Flatter spawn area
+                    num_patches=8,
+                    patch_radius=0.05,
+                    x_range=(-0.5, 0.5),
+                    y_range=(-0.5, 0.5),
+                    z_range=(-0.5, 0.5),
+                    max_height_diff=0.15,
                 ),
                 "target": FlatPatchSamplingCfg(
-                    num_patches=5,  # Fewer target options
-                    patch_radius=0.2,
-                    x_range=(-4.0, 4.0),  # Shorter distance to target
-                    y_range=(-4.0, 4.0),
-                    z_range=(0.0, 0.3),  # Target on stairs (~2 steps up: 2 * 0.08 = 0.16m)
-                    max_height_diff=0.1,
+                    num_patches=5,
+                    patch_radius=0.1,
+                    x_range=(-1.0, 1.0),
+                    y_range=(1.5, 3.2),   # match training
+                    z_range=(0.03, 0.20), # match training
+                    max_height_diff=0.25,
                 ),
             },
         ),
     },
 )
+# STAIR_TERRAINS_CFG_PLAY = TerrainGeneratorCfg(
+#     seed=42,
+#     size=(10.0, 10.0),
+#     border_width=2.0,
+#     # num_rows=1,
+#     # num_cols=1,
+#     num_rows=5,        # 5 difficulty levels
+#     num_cols=5,        # 5 variations per level
+#     curriculum=True,   # difficulty increases by row
+#     # difficulty_range=(0.0, 1.0),
+#     color_scheme="random",
+#     horizontal_scale=0.1,
+#     vertical_scale=0.005,
+#     slope_threshold=0.5,
+#     # difficulty_range=(0.05, 0.051),
+#     # difficulty_range=(0.95, 1.0),
+#     difficulty_range=(0.25, 0.40),   # instead of (0.95, 1.0)
+#     # use_cache=True,
+#     use_cache=False,
+#     sub_terrains={
+#         "hf_pyramid_stair_inv": terrain_gen.HfPyramidStairsTerrainCfg(
+#             inverted=True,
+#             proportion=1.0,
+#             # step_height_range=(0.04, 0.041),
+#             # step_height_range=(0.05,0.051),
+#             step_height_range=(0.06, 0.061),
+#             # step_height_range=(0.07, 0.071),
+#             # step_height_range=(0.08, 0.081),
+#             # step_height_range=(0.09, 0.091),
+#             # step_height_range=(0.1, 0.101),
+#             step_width=0.4,
+#             platform_width=3.0,
+#             border_width=1.0,
+#             flat_patch_sampling={
+#                 "init_pos": FlatPatchSamplingCfg(
+#                     num_patches=8,
+#                     patch_radius=0.05,    # keep as-is; now fits more comfortably on the larger platform
+#                     # x_range=(-1.0, 1.0), # centered search stays well inside the new 4 m platform
+#                     # y_range=(-1.0, 1.0),
+#                     # z_range=(-1.0, 1.0),
+#                     x_range=(-0.5, 0.5),
+#                     y_range=(-0.5, 0.5),
+#                     z_range=(-0.5, 0.5),
+#                     max_height_diff=0.15,
+#                 ),
+#                 "target": FlatPatchSamplingCfg(
+#                     num_patches=5,
+#                     patch_radius=0.1,
+#                     x_range=(-1.0, 1.0),
+
+#                     # y_range=(2.5, 4.0), ### 4cm  (3-4 steps: 12-16cm)
+#                     # z_range=(0.11, 0.17),
+
+#                     # y_range=(3.0, 4.0), ### 5cm  (3-4 steps: 15-20cm)
+#                     # z_range=(0.03, 0.6),
+#                     # y_range=(1.5, 3.0), ### 5cm  (3-4 steps: 15-20cm)
+#                     # z_range=(0.08, 0.14),   # <-- FIX: was (0.03, 0.6), way too wide/tall
+
+#                     y_range=(3.0, 5.5), ### 6cm  (3 steps: 18cm; range catches 2-3 steps)
+#                     z_range=(0.18, 0.30),
+
+#                     # y_range=(2.5, 4.0), ### 7cm  (2-3 steps: 14-21cm)
+#                     # z_range=(0.13, 0.22),
+
+#                     # y_range=(2.0, 3.5), ### 8cm  (2-3 steps: 16-24cm)
+#                     # z_range=(0.15, 0.25),
+
+#                     # y_range=(2.0, 3.5), ### 9cm  (2 steps: 18cm)
+#                     # z_range=(0.16, 0.20),
+
+#                     # y_range=(2.0, 3.5), ### 10cm (2 steps: 20cm)
+#                     # z_range=(0.18, 0.22),
+
+#                     max_height_diff=0.25,
+#                 ),
+#             },
+#         ),
+#     },
+# )
 """Simplified stair terrain for PLAY mode: only 2 gentle stairs, shorter distance to target."""
 
 
@@ -116,7 +216,7 @@ class StairConfigCfg:
         prim_path="/World/ground",
         terrain_type="generator",
         terrain_generator=STAIR_TERRAINS_CFG,
-        max_init_terrain_level=5,
+        max_init_terrain_level=4,
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -138,7 +238,7 @@ class StairConfigCfg_PLAY:
         prim_path="/World/ground",
         terrain_type="generator",
         terrain_generator=STAIR_TERRAINS_CFG_PLAY,
-        max_init_terrain_level=0,  # No curriculum in play mode
+        max_init_terrain_level=1,
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",

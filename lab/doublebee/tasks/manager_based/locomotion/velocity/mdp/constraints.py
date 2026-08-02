@@ -11,7 +11,6 @@ from isaaclab.sensors import ContactSensor
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 
-
 def propeller_collision(
     env: ManagerBasedEnv,
     sensor_cfg: SceneEntityCfg,
@@ -98,80 +97,261 @@ def propeller_collision(
     
     return collision
 
+# def propeller_collision(
+#     env: ManagerBasedEnv,
+#     sensor_cfg: SceneEntityCfg,
+#     threshold: float = 150.0,
+# ) -> torch.Tensor:
+#     """Terminate if a propeller sustains real contact with an obstacle.
+
+#     Uses MEAN force over the history window (not max), because PhysX reports
+#     huge single-substep contact spikes (500-6800N) for even trivial grazes.
+#     Those spikes are solver artifacts, not real collisions. The MEAN reflects
+#     sustained pressure — a prop genuinely jammed against a riser shows high
+#     sustained force, while a brief graze averages low.
+
+#     Args:
+#         threshold: sustained force (N) over history to count as a real collision.
+#                    ~40N given observed ~10N baseline during normal motion.
+#     """
+#     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+#     net_contact_forces = contact_sensor.data.net_forces_w_history  # (envs, hist, bodies, 3)
+
+#     asset: Articulation = env.scene["robot"]
+#     left_ids = asset.find_bodies("leftPropeller")[0]
+#     right_ids = asset.find_bodies("rightPropeller")[0]
+
+#     if len(left_ids) == 0 or len(right_ids) == 0:
+#         return torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
+
+#     left_id = left_ids[0]
+#     right_id = right_ids[0]
+
+#     # force magnitude per history step: (envs, hist)
+#     left_mags = torch.norm(net_contact_forces[:, :, left_id, :], dim=-1)
+#     right_mags = torch.norm(net_contact_forces[:, :, right_id, :], dim=-1)
+
+#     # SUSTAINED force = mean over history (ignores single-substep spikes)
+#     left_sustained = left_mags.mean(dim=1)   # (envs,)
+#     right_sustained = right_mags.mean(dim=1)  # (envs,)
+
+#     # optional peak guard: also terminate on a truly enormous strike
+#     # (real violent ram, not a graze). Set high so grazes never hit it.
+#     # PEAK_GUARD = 3000.0
+#     # left_peak = left_mags.max(dim=1)[0]
+#     # right_peak = right_mags.max(dim=1)[0]
+
+#     # left_collision = ((left_sustained > threshold) | (left_peak > PEAK_GUARD)).float()
+#     # right_collision = ((right_sustained > threshold) | (right_peak > PEAK_GUARD)).float()
+#     left_collision = (left_sustained > threshold).float()
+#     right_collision = (right_sustained > threshold).float()
+
+#     collision = torch.maximum(left_collision, right_collision)
+
+#     if collision.dim() > 1:
+#         collision = collision.squeeze()
+#     elif collision.dim() == 0:
+#         collision = collision.unsqueeze(0)
+    
+#     # print("LEFT SUSTAINED MAX: ", left_sustained.max().item())
+#     # print("RIGHT SUSTAINED MAX: ", right_sustained.max().item())
+
+#     # one-time symmetry check
+#     if not hasattr(env, "_sym_check"):
+#         asset = env.scene["robot"]
+#         lid = asset.find_bodies("leftPropeller")[0][0]
+#         rid = asset.find_bodies("rightPropeller")[0][0]
+#         # positions relative to base, env 0
+#         base_pos = asset.data.root_pos_w[0]
+#         lpos = asset.data.body_pos_w[0, lid] - base_pos
+#         rpos = asset.data.body_pos_w[0, rid] - base_pos
+#         # print(f"[SYM] left_rel={lpos.tolist()}", flush=True)
+#         # print(f"[SYM] right_rel={rpos.tolist()}", flush=True)
+#         # masses
+#         # print(f"[SYM] left_mass={asset.data.default_mass[0, lid].item():.4f} right_mass={asset.data.default_mass[0, rid].item():.4f}", flush=True)
+#         env._sym_check = True
+        
+#     return collision
+
+# def goal_reached(
+#     env: ManagerBasedEnv,
+#     distance_threshold: float = 0.25,
+# ) -> torch.Tensor:
+#     """Constraint that terminates if robot reaches the goal target.
+    
+#     Checks if the robot's XY position is within distance_threshold of the current target.
+#     This indicates the robot has successfully reached the goal.
+    
+#     Args:
+#         env: The environment instance
+#         distance_threshold: Maximum distance in meters to consider as "reached" (default: 0.5m)
+    
+#     Returns:
+#         Binary goal reached indicator per environment. Shape: (num_envs,)
+#         - 1.0 = goal reached (terminate episode)
+#         - 0.0 = goal not reached (continue episode)
+#     """
+#     robot = env.scene["robot"]
+    
+#     # Get robot base position in world frame (XY only)
+#     robot_pos_w = robot.data.root_pos_w[:, :2]  # [num_envs, 2]
+    
+#     # Get the command term to access its selected target
+#     cmd_manager = env.command_manager
+#     if "base_velocity" not in cmd_manager._terms:
+#         # Command not found, return no goal reached
+#         return torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
+    
+#     command_term = cmd_manager._terms["base_velocity"]
+    
+#     # Check if this is TerrainTargetDirectionCommand with current_targets_w
+#     if not hasattr(command_term, "current_targets_w"):
+#         # Not using terrain target command, fall back to finding nearest target
+#         terrain = env.scene["terrain"]
+#         if "target" not in terrain.flat_patches:
+#             return torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
+        
+#         target_patches = terrain.flat_patches["target"]
+#         terrain_levels = terrain.terrain_levels
+#         terrain_types = terrain.terrain_types
+#         env_origins = env.scene.env_origins
+        
+#         level_indices = terrain_levels
+#         type_indices = terrain_types
+#         targets_relative = target_patches[level_indices, type_indices, :, :]
+#         targets_world = targets_relative + env_origins.unsqueeze(1)
+#         targets_xy = targets_world[:, :, :2]
+        
+#         robot_pos_xy_expanded = robot_pos_w.unsqueeze(1)
+#         distances = torch.norm(targets_xy - robot_pos_xy_expanded, dim=2)
+#         min_distances = torch.min(distances, dim=1)[0]
+#     else:
+#         # Use the command's selected target (aligned with command)
+#         current_targets_w = command_term.current_targets_w  # [num_envs, 3]
+#         current_targets_xy = current_targets_w[:, :2]  # [num_envs, 2]
+        
+#         # Compute distance from robot to command's selected target
+#         distances_xy = robot_pos_w - current_targets_xy  # [num_envs, 2]
+#         min_distances = torch.norm(distances_xy, dim=1)  # [num_envs]
+    
+#     # Check if robot is within threshold of goal
+#     goal_reached = (min_distances <= distance_threshold).float()
+    
+#     # Ensure 1D shape: (num_envs,) not (num_envs, 1)
+#     if goal_reached.dim() > 1:
+#         goal_reached = goal_reached.squeeze()
+#     elif goal_reached.dim() == 0:
+#         # Handle scalar case (shouldn't happen, but be safe)
+#         goal_reached = goal_reached.unsqueeze(0)
+    
+#     # print(f"[GOAL] robot_w={robot_pos_w[0].tolist()} target={current_targets_xy[0].tolist()} "
+#         #   f"env_origin={env.scene.env_origins[0,:2].tolist()} dist={min_distances[0].item():.2f}", flush=True)
+    
+#     # in goal_reached:
+#     # print(f"[GOAL] robot={robot_pos_w[0].tolist()} "
+#         # f"cmd_target={current_targets_xy[0].tolist()} "
+#         # f"buffer_target={env._aligned_targets_buffer[0,:2].tolist()} "
+#         # f"dist={min_distances[0].item():.2f}", flush=True)
+    
+#     return goal_reached
 
 def goal_reached(
     env: ManagerBasedEnv,
-    distance_threshold: float = 0.2,
+    distance_threshold: float = 0.25,
+    upright_threshold: float = 0.15,
+    ang_vel_threshold: float = 3.5,
 ) -> torch.Tensor:
     """Constraint that terminates if robot reaches the goal target.
-    
-    Checks if the robot's XY position is within distance_threshold of the current target.
-    This indicates the robot has successfully reached the goal.
-    
+
+    Checks THREE things now, not just XY distance: (1) close to target,
+    (2) upright (not tipped over), (3) settled (not mid-tumble). This
+    prevents counting a stumble-that-ends-up-close as a "success" — the
+    metric was previously blind to HOW the robot arrived, only WHERE.
+
     Args:
         env: The environment instance
-        distance_threshold: Maximum distance in meters to consider as "reached" (default: 0.5m)
-    
+        distance_threshold: Maximum distance in meters to consider as "reached"
+        upright_threshold: Max allowed tilt-from-vertical (via projected gravity)
+        ang_vel_threshold: Max allowed angular velocity magnitude (rad/s) — must be settled
+
     Returns:
         Binary goal reached indicator per environment. Shape: (num_envs,)
-        - 1.0 = goal reached (terminate episode)
-        - 0.0 = goal not reached (continue episode)
     """
     robot = env.scene["robot"]
-    
-    # Get robot base position in world frame (XY only)
+
     robot_pos_w = robot.data.root_pos_w[:, :2]  # [num_envs, 2]
-    
-    # Get the command term to access its selected target
+
     cmd_manager = env.command_manager
     if "base_velocity" not in cmd_manager._terms:
-        # Command not found, return no goal reached
         return torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
-    
+
     command_term = cmd_manager._terms["base_velocity"]
-    
-    # Check if this is TerrainTargetDirectionCommand with current_targets_w
+
     if not hasattr(command_term, "current_targets_w"):
-        # Not using terrain target command, fall back to finding nearest target
         terrain = env.scene["terrain"]
         if "target" not in terrain.flat_patches:
             return torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
-        
+
         target_patches = terrain.flat_patches["target"]
         terrain_levels = terrain.terrain_levels
         terrain_types = terrain.terrain_types
         env_origins = env.scene.env_origins
-        
+
         level_indices = terrain_levels
         type_indices = terrain_types
         targets_relative = target_patches[level_indices, type_indices, :, :]
         targets_world = targets_relative + env_origins.unsqueeze(1)
         targets_xy = targets_world[:, :, :2]
-        
+
         robot_pos_xy_expanded = robot_pos_w.unsqueeze(1)
         distances = torch.norm(targets_xy - robot_pos_xy_expanded, dim=2)
         min_distances = torch.min(distances, dim=1)[0]
     else:
-        # Use the command's selected target (aligned with command)
-        current_targets_w = command_term.current_targets_w  # [num_envs, 3]
-        current_targets_xy = current_targets_w[:, :2]  # [num_envs, 2]
-        
-        # Compute distance from robot to command's selected target
-        distances_xy = robot_pos_w - current_targets_xy  # [num_envs, 2]
-        min_distances = torch.norm(distances_xy, dim=1)  # [num_envs]
-    
-    # Check if robot is within threshold of goal
-    goal_reached = (min_distances <= distance_threshold).float()
-    
-    # Ensure 1D shape: (num_envs,) not (num_envs, 1)
+        current_targets_w = command_term.current_targets_w
+        current_targets_xy = current_targets_w[:, :2]
+
+        distances_xy = robot_pos_w - current_targets_xy
+        min_distances = torch.norm(distances_xy, dim=1)
+
+    # --- existing XY check ---
+    close_enough = min_distances <= distance_threshold
+
+    # --- upright check ---
+    uprightness = -robot.data.projected_gravity_b[:, 2]
+    is_upright = uprightness > (1.0 - upright_threshold)
+
+    # --- settled check ---
+    ang_vel_mag = torch.norm(robot.data.root_ang_vel_w, dim=1)
+    is_settled = ang_vel_mag < ang_vel_threshold
+
+    # --- height check ---
+    robot_z = robot.data.root_pos_w[:, 2]
+    if hasattr(command_term, "current_targets_w"):
+        target_z = command_term.current_targets_w[:, 2]
+        height_diff = target_z - robot_z
+        at_height = height_diff < 0.15
+    else:
+        # no target Z available — skip height check
+        at_height = torch.ones(env.num_envs, device=env.device, dtype=torch.bool)
+
+    goal_reached = (close_enough & is_upright & is_settled & at_height).float()
+
     if goal_reached.dim() > 1:
         goal_reached = goal_reached.squeeze()
     elif goal_reached.dim() == 0:
-        # Handle scalar case (shouldn't happen, but be safe)
         goal_reached = goal_reached.unsqueeze(0)
-    
-    return goal_reached
 
+    # add inside goal_reached, after computing all the check tensors, before the return
+    if close_enough[0].item():
+        print(f"[NEAR GOAL env0] close={close_enough[0].item()} "
+            f"upright={is_upright[0].item()} "
+            f"settled={is_settled[0].item()} "
+            f"height_ok={at_height[0].item()} "
+            f"height_diff={height_diff[0].item():.3f} "
+            f"ang_vel={torch.norm(robot.data.root_ang_vel_w[0]).item():.3f} "
+            f"uprightness={(-robot.data.projected_gravity_b[0, 2]).item():.3f}", flush=True)
+
+    return goal_reached
 
 def robot_out_of_bounds(
     env: ManagerBasedEnv,

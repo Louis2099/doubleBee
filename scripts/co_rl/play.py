@@ -116,7 +116,7 @@ from scripts.co_rl.core.wrapper import (
 from isaaclab.envs import DirectMARLEnv, multi_agent_to_single_agent
 from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
-from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
+# from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.markers.config import BLUE_ARROW_X_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG
 import isaaclab.sim as sim_utils
@@ -559,8 +559,12 @@ def main():
             cmd_manager = env.unwrapped.command_manager
             if hasattr(cmd_manager, "_terms") and "base_velocity" in cmd_manager._terms:
                 velocity_cmd = cmd_manager._terms["base_velocity"]
+                # if hasattr(velocity_cmd, "current_targets_w"):
+                #     target_pos = velocity_cmd.current_targets_w[0:1, :].clone()  # [1, 3]
+                #     target_visualizer.visualize(target_pos)
                 if hasattr(velocity_cmd, "current_targets_w"):
-                    target_pos = velocity_cmd.current_targets_w[0:1, :].clone()  # [1, 3]
+                    target_pos = velocity_cmd.current_targets_w[:, :].clone()  # [num_envs, 3]
+                    target_pos = target_pos # + env.unwrapped.scene.env_origins  # back to world frame
                     target_visualizer.visualize(target_pos)
         except Exception:
             pass  # Silently fail if target not accessible
@@ -693,19 +697,57 @@ def main():
                 cmd_manager = env.unwrapped.command_manager
                 if hasattr(cmd_manager, "_terms") and "base_velocity" in cmd_manager._terms:
                     velocity_cmd = cmd_manager._terms["base_velocity"]
+                    # if hasattr(velocity_cmd, "current_targets_w"):
+                    #     # Get target position for environment 0 (since we're in play mode with num_envs=1)
+                    #     target_pos = velocity_cmd.current_targets_w[0:1, :].clone()  # [1, 3]
+                    #     target_visualizer.visualize(target_pos)
                     if hasattr(velocity_cmd, "current_targets_w"):
-                        # Get target position for environment 0 (since we're in play mode with num_envs=1)
-                        target_pos = velocity_cmd.current_targets_w[0:1, :].clone()  # [1, 3]
+                        target_pos = velocity_cmd.current_targets_w[:, :].clone()  # [num_envs, 3]
+                        target_pos = target_pos # + env.unwrapped.scene.env_origins  # back to world frame
                         target_visualizer.visualize(target_pos)
             except Exception as e:
                 # Silently fail if target not accessible
                 pass
-        
+
+        cmd = env.unwrapped.command_manager._terms.get("base_velocity")
+        if cmd is not None and hasattr(cmd, "current_targets_w"):
+            target = cmd.current_targets_w[0]
+            robot_pos = env.unwrapped.scene["robot"].data.root_pos_w[0]
+            print(f"[TARGET] target_xyz={target.cpu().numpy().round(3)} "
+                f"robot_xyz={robot_pos.cpu().numpy().round(3)} "
+                f"height_diff={target[2].item()-robot_pos[2].item():.3f}m", flush=True)
+
+        terrain = env.unwrapped.scene.terrain
+        origins = terrain.terrain_origins  # shape [num_rows, num_cols, 3]
+        print("=== TERRAIN Z ORIGINS PER ROW ===")
+        for row in range(origins.shape[0]):
+            z_vals = origins[row, :, 2]
+            print(f"Row {row}: Z mean={z_vals.mean().item():.3f} min={z_vals.min().item():.3f} max={z_vals.max().item():.3f}")
+
+        # The step height per row = difference in Z between consecutive rows / number of steps
+        # For inverted pyramid with platform_width=3.0 and size=10.0:
+        # approximate number of steps = (terrain_size - platform_width) / (2 * step_width) = (10 - 3) / (2 * 0.4) ≈ 8-9 steps per side
+        print()
+        print("=== ESTIMATED STEP HEIGHTS ===")
+        for row in range(1, origins.shape[0]):
+            z_prev = origins[row-1, :, 2].mean().item()
+            z_curr = origins[row, :, 2].mean().item()
+            total_height = abs(z_curr - z_prev)
+            # inverted pyramid: robot spawns at bottom, climbs up
+            # total height / num_steps gives per-step height
+            num_steps = (10.0 - 3.0) / (2 * 0.4)  # ~8.75, so ~8 steps per side
+            per_step = total_height / 8.75
+            print(f"Row {row-1}→{row}: total_height={total_height:.3f}m per_step≈{per_step*100:.1f}cm")
+                    
         # Update command velocity arrow visualizer if enabled
         if cmd_vel_arrow_visualizer is not None or actual_vel_arrow_visualizer is not None:
             try:
                 robot = env.unwrapped.scene["robot"]
                 if robot.is_initialized:
+
+                    servo_idx = robot.joint_names.index("rightPropellerServo")
+                    # print(f"servo_pos: {robot.data.joint_pos[:1, servo_idx].item():.3f} rad")
+
                     # Get robot base position in world frame
                     base_pos_w = robot.data.root_pos_w[0:1, :].clone()  # [1, 3]
                     robot_quat_w = robot.data.root_quat_w[0:1, :]  # [1, 4]

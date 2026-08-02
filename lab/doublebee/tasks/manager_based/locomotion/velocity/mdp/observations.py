@@ -294,19 +294,19 @@ class ObservationsCfg:
             noise=Unoise(n_min=-1.5, n_max=1.5),
         )
         
-        # Servo positions - Critical for propeller orientation control
-        servo_pos = ObsTerm(
-            func=servo_positions,
-            # No scaling needed, positions are already in [-1.57, 1.57] (±90°)
-            noise=Unoise(n_min=-0.05, n_max=0.05),
-        )
+        # # Servo positions - Critical for propeller orientation control
+        # servo_pos = ObsTerm(
+        #     func=servo_positions,
+        #     # No scaling needed, positions are already in [-1.57, 1.57] (±90°)
+        #     noise=Unoise(n_min=-0.05, n_max=0.05),
+        # )
         
-        # Propeller velocities - For thrust generation feedback
-        propeller_vel = ObsTerm(
-            func=propeller_velocities,
-            scale=0.01,  # Scale down high propeller speeds (typ. 0-600 rad/s)
-            noise=Unoise(n_min=-1.5, n_max=1.5),
-        )
+        # # Propeller velocities - For thrust generation feedback
+        # propeller_vel = ObsTerm(
+        #     func=propeller_velocities,
+        #     scale=0.01,  # Scale down high propeller speeds (typ. 0-600 rad/s)
+        #     noise=Unoise(n_min=-1.5, n_max=1.5),
+        # )
 
         # ========================================
         # 2. Base State (Robot body motion)
@@ -322,13 +322,14 @@ class ObservationsCfg:
         # Angular velocity in body frame - For rotation control
         base_ang_vel = ObsTerm(
             func=mdp.base_ang_vel, 
-            scale=0.25,  # Reduce magnitude of angular velocity
-            noise=Unoise(n_min=-0.2, n_max=0.2),
+            scale=0.10,  # Reduce magnitude of angular velocity
+            noise=Unoise(n_min=-0.1, n_max=0.1),
         )
         
         # Projected gravity - Encodes robot orientation (roll, pitch)
         base_projected_gravity = ObsTerm(
             func=mdp.projected_gravity,
+            scale=1.15,
             noise=Unoise(n_min=-0.05, n_max=0.05),
         )
 

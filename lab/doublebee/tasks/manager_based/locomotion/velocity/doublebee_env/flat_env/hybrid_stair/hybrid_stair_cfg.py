@@ -16,7 +16,7 @@ from lab.doublebee.assets.doublebee import DOUBLEBEE_CFG
 from lab.doublebee.tasks.manager_based.locomotion.velocity.doublebee_env.velocity_env_cfg import DoubleBeeVelocityEnvCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import aerodynamics
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import events as mdp  # Use local events module instead of source
-from isaaclab.envs.mdp import randomize_actuator_gains
+from isaaclab.envs.mdp import randomize_actuator_gains, randomize_rigid_body_mass, push_by_setting_velocity
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.rewards import RewardsCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.stair_config import StairConfigCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.velocity_command import TerrainTargetDirectionCommandCfg
@@ -48,6 +48,9 @@ from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfg
 @configclass
 class DoubleBeeEventsCfg:
     """Event configuration for DoubleBee hybrid (propeller + wheel) staircase task."""
+
+    # https://github.com/Louis2099/doubleBee/commit/eaa18f843379c086a4de37a52bbf24d6e2039bc6
+    # https://github.com/Louis2099/doubleBee/commit/d264a864d8382b9910b8446cf217c52d0bad6120
 
     # One-time at spawn: assign PhysX material to wheel colliders so friction is correct
     # apply_wheel_friction = EventTerm(
@@ -92,24 +95,28 @@ class DoubleBeeEventsCfg:
     # )
 
     # Domain randomization: thrust output ±20% per env per propeller (sampled at reset)
-    # sample_thrust_scale_dr = EventTerm(
-    #     func=aerodynamics.sample_thrust_scale_dr,
-    #     mode="reset",
-    #     params={"range_low": 0.8, "range_high": 1.2, "num_propellers": 2},
-    # )
+    sample_thrust_scale_dr = EventTerm(
+        func=aerodynamics.sample_thrust_scale_dr,
+        mode="reset",
+        params={"range_low": 0.8, "range_high": 1.2, "num_propellers": 2},
+    )
 
     # NOTE: Reset/spawn is controlled here. Position is sampled from terrain "init_pos" flat patches.
     # - pose_range: roll, pitch, yaw in rad. Only orientation is randomized (position from terrain).
     # - velocity_range: x, y, z in m/s (linear); roll, pitch, yaw in rad/s (angular). Sampled uniformly.
     # To randomize initial velocity and orientation, set non-zero (min, max) for the desired keys.
     reset_base = EventTerm(
-        func=mdp.reset_root_state_from_terrain_aligned,
+        func=mdp.reset_root_state_climb_commit_mix,
         mode="reset",
         params={
             "pose_range": {
-                "roll": (0.0, 0.0),       # No roll randomization - perfectly upright
-                "pitch": (0.0, 0.0),      # No pitch randomization - perfectly level
-                "yaw_noise": (0.0, 0.0),  # No yaw noise - perfect alignment toward target
+                # "roll": (0.0, 0.0),       # No roll randomization - perfectly upright
+                # "pitch": (0.0, 0.0),      # No pitch randomization - perfectly level
+                "roll": (-0.05, 0.05),    # ±3° roll noise
+                "pitch": (-0.05, 0.05),   # ±3° pitch noise
+                "yaw" :(0.0, 0.0),
+                # "yaw_noise": (0.0, 0.0),  # No yaw noise - perfect alignment toward target 
+                "yaw_noise": (-0.05, 0.05), # ±6° yaw noise
             },
             "velocity_range": {
                 "x": (0.0, 0.0),      # No initial linear velocity in X
@@ -119,7 +126,9 @@ class DoubleBeeEventsCfg:
                 "pitch": (0.0, 0.0),  # No initial angular velocity around Y (pitch rate)
                 "yaw": (0.0, 0.0),    # No initial angular velocity around Z (yaw rate - NOT SPINNING)
             },
-            "align_axis": "x",  # Align on X axis (robot moves along Y axis)
+            "align_axis": "x",  # Align on X axis (robot moves along Y axis),
+            "frac_commit": 0.25,
+            "commit_pitch": 0.05,
         },
     )
 
@@ -135,6 +144,88 @@ class DoubleBeeEventsCfg:
         },
     )
 
+    # randomize_robot_mass = EventTerm(
+    #     func=randomize_rigid_body_mass,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+    #         "mass_distribution_params": (0.85, 1.15),  # ±15% scale
+    #         "operation": "scale",
+    #     },
+    # )
+
+    # randomize_robot_mass = EventTerm(
+    #     func=randomize_rigid_body_mass,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=["body"]),  # main body only, not .*
+    #         "mass_distribution_params": (0.95, 1.05),  # ±5% scale
+    #         "operation": "scale",
+    #     },
+    # )
+
+    # randomize_com = EventTerm(
+    #     func=mdp.randomize_com_positions,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=["body"]),
+    #         "com_distribution_params": (-0.01, 0.01),  # ±1cm COM offset, 0.003!
+    #         "operation": "add",
+    #         "distribution": "uniform",
+    #     },
+    # )
+
+    # push_robot = EventTerm(
+    #     func=push_by_setting_velocity,
+    #     mode="interval",
+    #     interval_range_s=(3.0, 6.0),   # was (8,15) — more frequent so policy sees many slow tilts
+    #     params={
+    #         "velocity_range": {
+    #             "x": (-0.2, 0.2),    # keep gentle
+    #             "y": (-0.2, 0.2),
+    #             # add a small angular component to induce actual tilt, not just translation
+    #             "roll": (-0.2, 0.2),   # gentle tilt rates → slow tilts the servo must respond to
+    #             "pitch": (-0.2, 0.2),
+    #         },
+    #     },
+    # )
+
+    # randomize_joint_actuator_gains = EventTerm(
+    #     func=randomize_actuator_gains,
+    #     mode="startup",  # once at start, not every reset
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", joint_names=["leftWheel", "rightWheel"]),
+    #         "stiffness_distribution_params": (0.8, 1.2),
+    #         "damping_distribution_params": (0.8, 1.2),
+    #         "operation": "scale",
+    #         "distribution": "log_uniform",
+    #     },
+    # )
+
+    # randomize_servo_actuator_gains = EventTerm(
+    #     func=randomize_actuator_gains,   # no mdp. prefix — imported from isaaclab.envs.mdp
+    #     mode="startup",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", joint_names=["leftPropellerServo", "rightPropellerServo"]),
+    #         "stiffness_distribution_params": (0.8, 1.2),
+    #         "damping_distribution_params": (0.8, 1.2),
+    #         "operation": "scale",
+    #         "distribution": "log_uniform",
+    #     },
+    # )
+
+    # randomize_friction = EventTerm(
+    #         func=mdp.randomize_rigid_body_material,
+    #         mode="reset",
+    #         params={
+    #             "asset_cfg": SceneEntityCfg("robot", body_names=["leftWheel", "rightWheel"]),
+    #             "static_friction_range": (0.8, 1.2),
+    #             "dynamic_friction_range": (0.7, 1.0),
+    #             "restitution_range": (0.0, 0.0),
+    #             "num_buckets": 64,
+    #             "make_consistent": True,  # keeps dynamic <= static
+    #         },
+    #     )
 
 @configclass
 class DoubleBeeEventsCfg_PLAY:
@@ -173,7 +264,7 @@ class DoubleBeeEventsCfg_PLAY:
     # NOTE: Reset robot state with aligned start/end positions for play mode
     # This ensures start and end points share the same X or Y coordinate, and robot faces the target
     reset_base = EventTerm(
-        func=mdp.reset_root_state_from_terrain_aligned,
+        func=mdp.reset_root_state_climb_commit_mix,
         mode="reset",
         params={
             "pose_range": {
@@ -189,7 +280,9 @@ class DoubleBeeEventsCfg_PLAY:
                 "pitch": (0.0, 0.0),  # No initial angular velocity around Y (pitch rate)
                 "yaw": (0.0, 0.0),    # No initial angular velocity around Z (yaw rate - NOT SPINNING)
             },
-            "align_axis": "x",  # Align on X axis (robot moves along Y axis)
+            "align_axis": "x",  # Align on X axis (robot moves along Y axis),
+            "frac_commit": 0.0,
+            "commit_pitch": 0.0,
         },
     )
 

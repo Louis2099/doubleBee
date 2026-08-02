@@ -9,6 +9,31 @@ import torch
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.utils import configclass
 
+from isaaclab.utils.math import quat_apply 
+
+# top of rewards.py, after imports
+import json, os as _os
+
+def _load_poly(json_path: str):
+    with open(json_path, encoding="utf-8") as f:
+        d = json.load(f)
+    import torch
+    return torch.tensor(d["coeffs"], dtype=torch.float32), d["is_exponential"]
+
+_MDPDIR = _os.path.dirname(__file__)
+_PWM_POWER_COEFFS, _PWM_POWER_IS_EXP = _load_poly(
+    _os.path.join(_MDPDIR, "pwm2power_params.json")
+)
+_RPM_POWER_COEFFS, _RPM_POWER_IS_EXP = _load_poly(
+    _os.path.join(_MDPDIR, "rpm2power_params.json")
+)
+
+def _torch_polyval(coeffs: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+    """Horner's method — works on any shape x, coeffs on same device."""
+    out = torch.zeros_like(x)
+    for c in coeffs:
+        out = out * x + c
+    return out
 
 def velocity_direction_alignment(env) -> torch.Tensor:
     """Reward for aligning robot's XY velocity direction with command's XY velocity direction.
@@ -64,6 +89,120 @@ def velocity_direction_alignment(env) -> torch.Tensor:
     
     return scaled_alignment
 
+def reward_stable_after_climb(env) -> torch.Tensor:
+    """Reward being UPRIGHT and SETTLED after gaining height. Targets the
+    brute-force-then-topple failure: the robot boosts up the step but can't catch
+    itself. This rewards 'you climbed AND you're level AND you're not tumbling',
+    so lurch-and-fall gets nothing and controlled climb-and-settle gets rewarded."""
+    robot = env.scene["robot"]
+
+    # height gained above spawn
+    spawn_z = env.scene.env_origins[:, 2]
+    height_above = robot.data.root_pos_w[:, 2] - spawn_z
+    climbed = torch.clamp(height_above / 0.04, 0.0, 1.0)  # ramps 0->1 over first 4cm
+
+    # upright: projected gravity Z near -1 means body is level
+    upright = torch.clamp(-robot.data.projected_gravity_b[:, 2], 0.0, 1.0)  # 1 = level, 0 = on its side
+
+    # settled: low angular velocity (not tumbling/toppling)
+    ang_vel_mag = torch.norm(robot.data.root_ang_vel_w, dim=1)
+    settled = torch.exp(-ang_vel_mag / 2.0)  # 1 when still, decays as it spins
+
+    # reward only when all three: climbed, upright, settled
+    return climbed * upright * settled
+
+def reward_climb_progress(env) -> torch.Tensor:
+    """Reward GAINING HEIGHT while at a step. Technique-agnostic: doesn't prescribe
+    pitch/prop/servo — rewards the OUTCOME (going up at a step) so the policy can
+    discover how. Safety (no face-plant, no collision) is handled by separate penalties."""
+    robot = env.scene["robot"]
+
+    # --- rising: upward velocity of the body ---
+    vz = robot.data.root_lin_vel_w[:, 2]
+    rising = torch.clamp(vz / 0.2, 0.0, 1.0)  # 0 to 1, saturates at 0.2 m/s up
+
+    # --- step-ahead gate: is there terrain higher than the robot nearby (a step)? ---
+    step_ahead = torch.ones(robot.num_instances, device=robot.device)
+    try:
+        hs = env.scene["height_scanner"]
+        ray_z = torch.nan_to_num(
+            hs.data.ray_hits_w[..., 2], nan=0.0, posinf=0.0, neginf=0.0
+        )  # [num_envs, num_rays] world heights
+        ground_z = ray_z.median(dim=1)[0]              # flat-majority reference
+        max_ahead = ray_z.max(dim=1)[0]                # highest scanned point
+        step_ahead = torch.clamp((max_ahead - ground_z) / 0.04, 0.0, 1.0)  # 0-1, sat at 4cm step
+    except (KeyError, ValueError, IndexError):
+        pass  # no scanner -> gate stays 1 (fallback)
+    
+    try:
+        sj = robot.joint_names.index("leftPropellerServo")  # or whatever the servo joint is named
+        servo_pos = robot.data.joint_pos[:, sj]
+        if not hasattr(env, "_servo_dbg"): env._servo_dbg = 0
+        env._servo_dbg += 1
+        if env._servo_dbg % 50 == 0:
+            print(f"[SERVO] pos(rad)={servo_pos[0].item():.3f} min={servo_pos.min().item():.3f} max={servo_pos.max().item():.3f}", flush=True)
+    except (ValueError, IndexError):
+        pass
+
+        # ---- TEMP: log thrust world direction during climb ----
+    try:
+        lp = robot.body_names.index("leftPropeller")
+        rp = robot.body_names.index("rightPropeller")
+        prop_ids = torch.tensor([lp, rp], device=robot.device)
+        prop_quat = robot.data.body_quat_w[:, prop_ids, :]  # [n,2,4]
+
+        # thrust is along prop local +Z (matches apply_propeller_aerodynamics)
+        thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
+        thrust_local[:, :, 2] = 1.0
+        thrust_world = quat_apply(prop_quat, thrust_local)  # [n,2,3]
+        z_frac = thrust_world[:, :, 2].mean(dim=1)  # world-Z fraction, 1=up 0=horiz -1=down
+
+        if not hasattr(env, "_thrust_dbg"):
+            env._thrust_dbg = 0
+        env._thrust_dbg += 1
+        if env._thrust_dbg % 50 == 0:
+            print(f"[THRUST DIR] env0 z_frac={z_frac[0].item():.3f} "
+                  f"mean={z_frac.mean().item():.3f} "
+                  f"min={z_frac.min().item():.3f} max={z_frac.max().item():.3f}", flush=True)
+    except (ValueError, IndexError):
+        pass
+    # ---- END TEMP ----
+
+    # reward: going UP while AT a step. Technique-agnostic.
+    return rising * step_ahead
+
+def reward_thrust_up_at_step(env) -> torch.Tensor:
+    robot = env.scene["robot"]
+    lp = robot.body_names.index("leftPropeller")
+    rp = robot.body_names.index("rightPropeller")
+    prop_ids = torch.tensor([lp, rp], device=robot.device)
+    prop_quat = robot.data.body_quat_w[:, prop_ids, :]
+    thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
+    thrust_local[:, :, 2] = 1.0
+    thrust_world = quat_apply(prop_quat, thrust_local)
+    z_frac = torch.clamp(thrust_world[:, :, 2].mean(dim=1), 0.0, 1.0)
+    z_frac = z_frac ** 2
+
+    # step gate only — NO prop_active term, so it doesn't reward spinning props FAST
+    step_ahead = torch.zeros(robot.num_instances, device=robot.device)
+    try:
+        hs = env.scene["height_scanner"]
+        ray_z = torch.nan_to_num(hs.data.ray_hits_w[..., 2], nan=0.0, posinf=0.0, neginf=0.0)
+        step_ahead = torch.clamp((ray_z.max(dim=1)[0] - ray_z.median(dim=1)[0]) / 0.04, 0.0, 1.0)
+    except (KeyError, ValueError, IndexError):
+        pass
+    return z_frac * step_ahead   # reward pointing up at a step, regardless of prop speed
+
+def reward_progress_to_target(env):
+    robot = env.scene["robot"]
+    cmd = env.command_manager._terms.get("base_velocity")
+    if cmd is None or not hasattr(cmd, "current_targets_w"):
+        return torch.zeros(robot.num_instances, device=robot.device)
+    dist = torch.norm(robot.data.root_pos_w[:, :2] - cmd.current_targets_w[:, :2], dim=1)
+    if not hasattr(env, "_pd") or env._pd.shape != dist.shape:
+        env._pd = dist.clone(); return torch.zeros_like(dist)
+    prog = env._pd - dist; env._pd = dist.clone()
+    return torch.clamp(prog, min=0.0) * 10.0
 
 def reach_terrain_target(env) -> torch.Tensor:
     """Reward for reaching terrain target positions.
@@ -121,14 +260,90 @@ def reach_terrain_target(env) -> torch.Tensor:
         # Compute distance from robot to command's selected target
         distances_xy = robot_pos_w - current_targets_xy  # [num_envs, 2]
         min_distances = torch.norm(distances_xy, dim=1)  # [num_envs]
+        # if torch.rand(1).item() < 0.01:
+        #     print(f"[REACH] min_dist range: {min_distances.min().item():.2f} to {min_distances.max().item():.2f}")
     
     # Exponential reward: exp(-distance² / scale²)
     # Scale = 2.0 means reward drops to ~0.6 at 2m, ~0.13 at 4m
-    scale = 2.0
+    scale = 1.5
     rewards = torch.exp(-(min_distances ** 2) / (scale ** 2))
-    
+
+    # NEW: scale proximity reward by height-match to target.
+    # Parking at the base earns 50% (still pulls robot in for navigation),
+    # being at target elevation earns 100% — makes climbing the better play.
+    # if hasattr(command_term, "current_targets_w"):
+    #     robot_z = robot.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
+    #     target_z = command_term.current_targets_w[:, 2]
+    #     height_match = torch.exp(-torch.abs(target_z - robot_z) / 0.1)  # 1 at target height, →0 at base
+    #     height_factor = 0.5 + 0.5 * height_match  # floor 0.5, max 1.0
+    #     rewards = rewards * height_factor
+    if hasattr(command_term, "current_targets_w"):
+        robot_z = robot.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
+        target_z = command_term.current_targets_w[:, 2]
+        height_match = torch.exp(-torch.abs(target_z - robot_z) / 0.1)
+        # height_factor = 0.5 + 0.5 * height_match
+        height_factor = 0.2 + 0.8 * height_match
+        rewards = rewards * height_factor
+
+        # print(f"[FRAME] robot_z={robot.data.root_pos_w[0,2].item():.2f} "
+        #   f"target_z={command_term.current_targets_w[0,2].item():.2f} "
+        #   f"env_origin_z={env.scene.env_origins[0,2].item():.2f}", flush=True)
+
     return rewards
 
+def reward_prop_catch_when_falling(env) -> torch.Tensor:
+    """Reward using upward prop thrust to arrest a downward fall. Fires when the robot
+    is moving DOWN (vz < 0) and rewards props pointed up + spinning — teaching the
+    'catch reflex' to save itself from slowly falling."""
+    robot = env.scene["robot"]
+
+    # falling: downward velocity (only active when descending)
+    vz = robot.data.root_lin_vel_w[:, 2]
+    falling = torch.clamp(-vz / 0.2, 0.0, 1.0)  # 0 when rising/level, →1 when falling fast
+
+    # props pointed up
+    lp = robot.body_names.index("leftPropeller")
+    rp = robot.body_names.index("rightPropeller")
+    prop_ids = torch.tensor([lp, rp], device=robot.device)
+    prop_quat = robot.data.body_quat_w[:, prop_ids, :]
+    thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
+    thrust_local[:, :, 2] = 1.0
+    thrust_world = quat_apply(prop_quat, thrust_local)
+    z_frac = torch.clamp(thrust_world[:, :, 2].mean(dim=1), 0.0, 1.0)
+
+    # props spinning (producing thrust)
+    lpj = robot.joint_names.index("leftPropeller")
+    rpj = robot.joint_names.index("rightPropeller")
+    prop_speed = torch.clamp(robot.data.joint_vel[:, [lpj, rpj]].abs().mean(dim=1) / 200.0, 0.0, 1.0)
+
+    # reward: falling AND props up AND spinning = catching itself
+    return falling * z_frac * prop_speed
+
+def penalize_cross_track_error(env) -> torch.Tensor:
+    """Penalize lateral deviation from the straight line spawn→target."""
+    robot = env.scene["robot"]
+    cmd = env.command_manager._terms.get("base_velocity")
+    if cmd is None or not hasattr(cmd, "current_targets_w"):
+        return torch.zeros(robot.num_instances, device=robot.device)
+
+    target_xy = cmd.current_targets_w[:, :2]
+    robot_xy = robot.data.root_pos_w[:, :2]
+    x_deviation = torch.abs(robot_xy[:, 0] - target_xy[:, 0])
+
+    # ---- TEMP FRAME DEBUG ----
+    # if not hasattr(env, "_ct_dbg"):
+    #     env._ct_dbg = 0
+    # env._ct_dbg += 1
+    # if env._ct_dbg % 30 == 0:
+    #     env_origin = env.scene.env_origins[0]
+    #     print(f"[CROSSTRACK] robot_xy={robot_xy[0].tolist()} "
+    #           f"target_xy={target_xy[0].tolist()} "
+    #           f"env_origin_xy={env_origin[:2].tolist()} "
+    #           f"x_dev={x_deviation[0].item():.3f} "
+    #           f"y_dev={(robot_xy[0,1]-target_xy[0,1]).item():.3f}", flush=True)
+    # ---- END TEMP ----
+
+    return -x_deviation
 
 def terminal_reward_goal_reached(env) -> torch.Tensor:
     """Terminal reward for successfully reaching the goal.
@@ -148,14 +363,13 @@ def terminal_reward_goal_reached(env) -> torch.Tensor:
     from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.constraints import goal_reached
     
     # Check if goal is reached (constraint is active)
-    goal_reached_mask = goal_reached(env, distance_threshold=0.2)  # [num_envs]
+    goal_reached_mask = goal_reached(env, distance_threshold=0.25)  # [num_envs]
     
     # Return positive reward only for environments where goal is reached
-    reward_value = 10.0  # Positive terminal reward
+    reward_value = 100  # Positive terminal reward
     rewards = goal_reached_mask * reward_value
     
     return rewards
-
 
 def terminal_reward_propeller_collision(env) -> torch.Tensor:
     """Terminal reward (penalty) for propeller collision.
@@ -179,7 +393,7 @@ def terminal_reward_propeller_collision(env) -> torch.Tensor:
     collision_mask = propeller_collision(
         env,
         sensor_cfg=SceneEntityCfg("contact_forces"),
-        threshold=1.0
+        threshold=1.0 # was 1.0
     )  # [num_envs]
     
     # Return negative reward only for environments where collision occurred
@@ -254,89 +468,57 @@ def penalize_propeller_efficiency(env) -> torch.Tensor:
         # If propeller joints not found, return zero penalty
         return torch.zeros(robot.num_instances, device=robot.device)
 
-
 def penalize_facing_direction_mismatch(env) -> torch.Tensor:
-    """Penalty for mismatch between robot facing direction and target direction.
-    
-    Reads the angle error directly from vel_command_b[:, 2], which represents the normalized
-    angle error between robot's facing direction and the direction to target.
-    The angle error is normalized to [-1, 1] range (where 0 = aligned, ±1 = max error).
-    
-    Args:
-        env: The environment instance
-        
-    Returns:
-        torch.Tensor: Scaled penalty per environment [num_envs] in range [-1, 0]
-        - Values closer to -1 for large angle errors (robot not facing target)
-        - Values closer to 0 for small/no angle errors (robot facing target)
-    """
     cmd_manager = env.command_manager
+    # vel_cmd = cmd_manager.get_command("base_velocity")
     
-    # Get velocity command which contains angle error in vel_command_b[:, 2]
-    vel_cmd = cmd_manager.get_command("base_velocity")  # [num_envs, 3] or [num_envs, 4]
-    
-    # Extract angle error (normalized to [-1, 1] range)
-    # This is the mismatch between robot facing direction and target direction
-    if vel_cmd.shape[1] >= 3:
-        angle_error_normalized = vel_cmd[:, 2]  # [num_envs] - normalized angle error
-    else:
-        # Fallback: return zero penalty if command doesn't have ang_vel_z
-        robot = env.scene["robot"]
-        return torch.zeros(robot.num_instances, device=robot.device)
-    
-    # Use absolute value to get magnitude of angle error (range: [0, 1])
-    angle_error_magnitude = -torch.abs(angle_error_normalized)  # [num_envs]
-    
-    
-    return angle_error_magnitude
+    # print(f"[FACING] cmd shape={vel_cmd.shape} cmd[0]={vel_cmd[0].tolist()}", flush=True)
 
+    # if vel_cmd.shape[1] >= 3:
+    #     angle_error_normalized = vel_cmd[:, 2]
+    # else:
+    #     robot = env.scene["robot"]
+    #     return torch.zeros(robot.num_instances, device=robot.device)
+    # return -torch.abs(angle_error_normalized)
+
+    robot = env.scene["robot"]
+    cmd_term = cmd_manager._terms["base_velocity"]
+    target_xy = cmd_term.current_targets_w[:, :2]
+    robot_xy = robot.data.root_pos_w[:, :2]
+    to_target = target_xy - robot_xy
+    desired_yaw = torch.atan2(to_target[:, 0], to_target[:, 1])  # +Y facing convention
+    # robot's actual yaw from quat
+    q = robot.data.root_quat_w
+    robot_yaw = torch.atan2(2*(q[:,0]*q[:,3]+q[:,1]*q[:,2]), 1-2*(q[:,2]**2+q[:,3]**2))
+    angle_error = torch.atan2(torch.sin(desired_yaw - robot_yaw), torch.cos(desired_yaw - robot_yaw))
+    
+    deadzone = 0.3 # ~17° free
+    penalty = torch.clamp(torch.abs(angle_error) - deadzone, min=0.0)
+    
+    # print(f"[FACING] angle_error[0]={angle_error[0].item():.2f} rad", flush=True)
+
+    return -penalty
 
 def penalize_tilt_angle(env) -> torch.Tensor:
-    """Penalty for excessive tilt angle (roll/pitch) to keep robot upright.
-    
-    Penalizes deviation from upright orientation. Uses projected gravity to measure tilt.
-    Scales the penalty to [-1, 0] range using e^(-x) - 1 transformation.
-    
-    Args:
-        env: The environment instance
-        
-    Returns:
-        torch.Tensor: Scaled penalty per environment [num_envs] in range [-1, 0]
-        - Values closer to -1 for large tilt angles
-        - Values closer to 0 when robot is upright
-    """
     robot = env.scene["robot"]
-    
-    # Get projected gravity in body frame [num_envs, 3]
-    # Projected gravity = rotation_matrix^T * [0, 0, -1]
-    # When robot is perfectly upright: projected_gravity = [0, 0, -1]
-    # When tilted, X and Y components are non-zero
-    projected_gravity = robot.data.projected_gravity_b  # [num_envs, 3]
-    
-    # Extract tilt components (X and Y components indicate roll/pitch)
-    # Z component indicates how upright the robot is
-    tilt_x = torch.abs(projected_gravity[:, 0])  # [num_envs] - related to pitch
-    tilt_y = torch.abs(projected_gravity[:, 1])  # [num_envs] - related to roll
-    
-    # Weights for each component (can be adjusted based on importance)
-    # Both roll and pitch are important for stability
-    weight_x = 3.0  # Pitch-like tilt
-    weight_y = 7.0  # Roll-like tilt
-    
-    # Compute weighted sum of squared tilt components
-    # Using squared values to strongly penalize large tilts
-    weighted_sum = (
-        weight_x * torch.sqrt(tilt_x) +
-        weight_y * torch.sqrt(tilt_y)
-    )  # [num_envs]
-    
-    # Scale to [-1, 0] using e^(-x) - 1 transformation
-    scaled_penalty = torch.exp(-weighted_sum) - 1.0  # [num_envs]
-    
+    projected_gravity = robot.data.projected_gravity_b
+    tilt_x = torch.abs(projected_gravity[:, 0])
+    tilt_y = torch.abs(projected_gravity[:, 1])
+    weighted_sum = 3.0 * torch.sqrt(tilt_x) + 7.0 * torch.sqrt(tilt_y)
+    scaled_penalty = torch.exp(-weighted_sum) - 1.0
+
+    # Reduce tilt penalty near stairs — robot needs to pitch to climb
+    cmd_term = env.command_manager._terms.get("base_velocity")
+    if cmd_term is not None and hasattr(cmd_term, "current_targets_w"):
+        target_xy = cmd_term.current_targets_w[:, :2]
+        robot_xy = robot.data.root_pos_w[:, :2]
+        dist = torch.norm(robot_xy - target_xy, dim=1)
+        near_target = torch.exp(-dist / 1.5)
+        scaled_penalty = scaled_penalty * (1.0 - 0.85 * near_target)
+
     return scaled_penalty
 
-
-def penalize_excessive_linear_speed(env, speed_threshold: float = 3.0) -> torch.Tensor:
+def penalize_excessive_linear_speed(env, speed_threshold: float = 1.0) -> torch.Tensor: # was 3.0
     """Penalty for excessive linear speed above a threshold.
     
     This prevents the robot from moving dangerously fast. Penalty is only active
@@ -369,7 +551,6 @@ def penalize_excessive_linear_speed(env, speed_threshold: float = 3.0) -> torch.
     scaled_penalty = torch.exp(-penalty_magnitude) - 1.0  # [num_envs]
     
     return scaled_penalty
-
 
 def penalize_propeller_on_flat_ground(env, flatness_threshold: float = 0.03) -> torch.Tensor:
     """Penalty for using propellers on flat ground where wheels should suffice.
@@ -428,112 +609,380 @@ def penalize_propeller_on_flat_ground(env, flatness_threshold: float = 0.03) -> 
         # If height_scanner or propeller joints not found, return zero penalty
         return torch.zeros(robot.num_instances, device=robot.device)
 
-
 def penalize_energy_consumption(env) -> torch.Tensor:
-    """Penalty for total energy consumption from propellers and wheels.
+    """Vectorized energy penalty from empirically-fit actuator power models.
     
-    Computes energy consumption by:
-    1. Converting propeller joint velocities (rad/s) to equivalent PWM
-    2. Using PWM-to-Power model to get propeller power (W)
-    3. Converting wheel joint velocities (rad/s) to RPM
-    4. Using RPM-to-Power model to get wheel power (W)
-    5. Summing total power and multiplying by simulation dt to get energy per step (J)
-    
-    Args:
-        env: The environment instance
-        
-    Returns:
-        torch.Tensor: Scaled penalty per environment [num_envs] in range [-1, 0]
-        - Values closer to -1 for high energy consumption
-        - Values closer to 0 for low energy consumption
+    Propeller: joint vel (rad/s) -> PWM -> Power (W) via degree-4 poly fit to bench data.
+    Wheel: joint vel (rad/s) -> RPM -> Power (W) via degree-4 poly fit to motor data.
+    No Python loops — pure tensor ops on GPU.
     """
-    from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.thrust_energy_model import (
-        pwm_to_thrust,
-        rpm_to_power,
-    )
-    import numpy as np
-    
     robot = env.scene["robot"]
-    
+    device = robot.device
+
     try:
-        # Get simulation timestep
-        dt = env.step_dt  # Time per step in seconds
-        
-        # ========== Propeller Energy Consumption ==========
-        # Get propeller joint velocities (rad/s)
-        left_propeller_idx = robot.joint_names.index("leftPropeller")
-        right_propeller_idx = robot.joint_names.index("rightPropeller")
-        propeller_vels = robot.data.joint_vel[:, [left_propeller_idx, right_propeller_idx]]  # [num_envs, 2]
-        
-        
-        # Convert RPM to equivalent PWM (approximate mapping)
-        # Typical PWM range: 1000-2000, typical RPM range: 0-10000
-        # Using linear approximation: PWM = 1000 + (RPM / 10000) * 1000
-        # Clamp to valid PWM range [1000, 2000]
-        propeller_pwm = 1000.0 + (torch.abs(propeller_vels) / 500.0) * 650.0  # [num_envs, 2]
-        propeller_pwm = torch.clamp(propeller_pwm, min=1000.0, max=2000.0)
-        
-        # Convert PWM to power (W) using the energy model
-        # Process each propeller separately and convert to numpy for the model
-        propeller_power_left = torch.tensor(
-            [pwm_to_thrust(pwm.item(), target="power") for pwm in propeller_pwm[:, 0]],
-            device=robot.device,
-            dtype=torch.float32,
-        )  # [num_envs]
-        propeller_power_right = torch.tensor(
-            [pwm_to_thrust(pwm.item(), target="power") for pwm in propeller_pwm[:, 1]],
-            device=robot.device,
-            dtype=torch.float32,
-        )  # [num_envs]
-        
-        total_propeller_power = propeller_power_left + propeller_power_right  # [num_envs] in Watts
-        
-        # ========== Wheel Energy Consumption ==========
-        # Get wheel joint velocities (rad/s)
-        left_wheel_idx = robot.joint_names.index("leftWheel")
-        right_wheel_idx = robot.joint_names.index("rightWheel")
-        wheel_vels = robot.data.joint_vel[:, [left_wheel_idx, right_wheel_idx]]  # [num_envs, 2]
-        
-        # Convert rad/s to RPM: RPM = (rad/s) * (60 / 2π)
-        wheel_rpm = torch.abs(wheel_vels) * (60.0 / (2.0 * np.pi))  # [num_envs, 2]
-        
-        # Convert RPM to power (W) using the RPM-to-Power model
-        # Note: The model expects RPM in range [0, 300] based on the CSV data
-        wheel_rpm_clamped = torch.clamp(wheel_rpm, min=0.0, max=300.0)
-        
-        wheel_power_left = torch.tensor(
-            [rpm_to_power(rpm.item()) for rpm in wheel_rpm_clamped[:, 0]],
-            device=robot.device,
-            dtype=torch.float32,
-        )  # [num_envs]
-        wheel_power_right = torch.tensor(
-            [rpm_to_power(rpm.item()) for rpm in wheel_rpm_clamped[:, 1]],
-            device=robot.device,
-            dtype=torch.float32,
-        )  # [num_envs]
-        
-        total_wheel_power = wheel_power_left + wheel_power_right  # [num_envs] in Watts
-        
-        # ========== Total Energy Consumption ==========
-        # Total power = propeller power + wheel power
-        total_power = total_propeller_power + total_wheel_power  # [num_envs] in Watts
-        
-        # Energy per step = power * dt (Joules)
-        energy_per_step = total_power * dt  # [num_envs] in Joules
-        
-        # Scale to [-1, 0] using exponential transformation
-        # Scale factor: typical energy per step might be 0-50 Joules
-        # exp(-energy/scale) - 1 maps [0, inf] to [-1, 0]
-        # Using scale=20 means: 0J -> 0, 20J -> -0.63, 40J -> -0.86, 60J -> -0.95
-        scale = 20.0
-        scaled_penalty = torch.exp(-energy_per_step / scale) - 1.0  # [num_envs]
-        
-        return scaled_penalty
-        
-    except (ValueError, IndexError, KeyError) as e:
-        # If joints not found or energy model fails, return zero penalty
+        dt = env.step_dt
+
+        pwm_coeffs = _PWM_POWER_COEFFS.to(device)
+        rpm_coeffs = _RPM_POWER_COEFFS.to(device)
+
+        # ===== Propeller power =====
+        left_p = robot.joint_names.index("leftPropeller")
+        right_p = robot.joint_names.index("rightPropeller")
+        prop_vels = robot.data.joint_vel[:, [left_p, right_p]]      # [num_envs, 2]
+
+        prop_pwm = 1000.0 + (torch.abs(prop_vels) / 500.0) * 650.0
+        prop_pwm = torch.clamp(prop_pwm, 1000.0, 2000.0)
+
+        prop_power = _torch_polyval(pwm_coeffs, prop_pwm)           # [num_envs, 2]
+        if _PWM_POWER_IS_EXP:
+            prop_power = torch.exp(prop_power)
+        prop_power = torch.clamp(prop_power, min=0.0)
+        total_prop_power = prop_power.sum(dim=1)                     # [num_envs]
+
+        # ===== Wheel power =====
+        left_w = robot.joint_names.index("leftWheel")
+        right_w = robot.joint_names.index("rightWheel")
+        wheel_vels = robot.data.joint_vel[:, [left_w, right_w]]     # [num_envs, 2]
+
+        wheel_rpm = torch.abs(wheel_vels) * (60.0 / (2.0 * torch.pi))
+        wheel_rpm = torch.clamp(wheel_rpm, 0.0, 300.0)
+
+        wheel_power = _torch_polyval(rpm_coeffs, wheel_rpm)         # [num_envs, 2]
+        if _RPM_POWER_IS_EXP:
+            wheel_power = torch.exp(wheel_power)
+        wheel_power = torch.clamp(wheel_power, min=0.0)
+        total_wheel_power = wheel_power.sum(dim=1)                   # [num_envs]
+
+        # ===== Total energy per step =====
+        total_power = total_prop_power + total_wheel_power           # [num_envs] Watts
+        energy_per_step = total_power * dt                           # [num_envs] Joules
+
+        # exp(-E/20) - 1: 0J->0, 20J->-0.63, 60J->-0.95
+        return torch.exp(-energy_per_step / 20.0) - 1.0
+
+    except (ValueError, IndexError, KeyError):
         return torch.zeros(robot.num_instances, device=robot.device)
 
+def penalize_stalling_near_target(env) -> torch.Tensor:
+    robot = env.scene["robot"]
+    cmd_term = env.command_manager._terms.get("base_velocity")
+    if cmd_term is None or not hasattr(cmd_term, "current_targets_w"):
+        return torch.zeros(robot.num_instances, device=robot.device)
+    target_xy = cmd_term.current_targets_w[:, :2]
+    robot_xy = (robot.data.root_pos_w[:, :2])
+    dist = torch.norm(robot_xy - target_xy, dim=1)
+    near_target = (dist < 0.5).float() # was 1.5
+    robot_speed = torch.norm(robot.data.root_lin_vel_w[:, :2], dim=1)
+    stalling = torch.exp(-robot_speed / 0.3)  # ~1 when nearly stationary
+    return -near_target * stalling
+
+def reward_stopping_at_target(env) -> torch.Tensor:
+    robot = env.scene["robot"]
+    cmd_term = env.command_manager._terms.get("base_velocity")
+    if cmd_term is None or not hasattr(cmd_term, "current_targets_w"):
+        return torch.zeros(robot.num_instances, device=robot.device)
+    target_xy = cmd_term.current_targets_w[:, :2]
+    robot_xy = robot.data.root_pos_w[:, :2]
+    dist = torch.norm(robot_xy - target_xy, dim=1)
+    # Only very close to target (0.5m)
+    very_near = torch.exp(-dist / 0.3)
+    # Reward LOW speed when near target
+    robot_speed = torch.norm(robot.data.root_lin_vel_w[:, :2], dim=1)
+    stopped = torch.exp(-robot_speed / 0.2)  # 1 when stopped, 0 when moving
+    return very_near * stopped
+
+def penalize_prolonged_no_progress(env, window: int = 100) -> torch.Tensor:
+    """Penalize going a long stretch (window steps) without meaningful XY or
+    height progress — directly targets the 'stuck, wandering, times out'
+    failure mode that plain proximity-based stalling doesn't catch."""
+    robot = env.scene["robot"]
+    cmd = env.command_manager._terms.get("base_velocity")
+    if cmd is None or not hasattr(cmd, "current_targets_w"):
+        return torch.zeros(robot.num_instances, device=robot.device)
+
+    target_xy = cmd.current_targets_w[:, :2]
+    robot_xy = robot.data.root_pos_w[:, :2]
+    dist = torch.norm(robot_xy - target_xy, dim=1)
+    height = robot.data.root_pos_w[:, 2]
+
+    if not hasattr(env, "_stall_dist_ref") or not hasattr(env, "_stall_height_ref") or not hasattr(env, "_stall_counter"):
+        env._stall_dist_ref = dist.clone()
+        env._stall_height_ref = height.clone()
+        env._stall_counter = torch.zeros(robot.num_instances, device=robot.device)
+
+    made_progress = (env._stall_dist_ref - dist > 0.05) | (height - env._stall_height_ref > 0.02)
+
+    env._stall_counter = torch.where(
+        made_progress, torch.zeros_like(env._stall_counter), env._stall_counter + 1
+    )
+    # reset reference points whenever progress happens
+    env._stall_dist_ref = torch.where(made_progress, dist, env._stall_dist_ref)
+    env._stall_height_ref = torch.where(made_progress, height, env._stall_height_ref)
+
+    prolonged_stall = (env._stall_counter > window).float()
+    return -prolonged_stall
+
+def reward_forward_progress(env) -> torch.Tensor:
+    robot = env.scene["robot"]
+    cmd_term = env.command_manager._terms.get("base_velocity")
+    if cmd_term is None or not hasattr(cmd_term, "current_targets_w"):
+        return torch.zeros(robot.num_instances, device=robot.device)
+    
+    target_xy = cmd_term.current_targets_w[:, :2]
+    robot_xy = robot.data.root_pos_w[:, :2]
+    dist_now = torch.norm(robot_xy - target_xy, dim=1)
+    
+    if not hasattr(env, "_prev_dist_to_target"):
+        env._prev_dist_to_target = dist_now.clone()
+    
+    progress = env._prev_dist_to_target - dist_now
+    env._prev_dist_to_target = dist_now.clone()
+    
+    # Reward getting closer, penalize moving away (asymmetric)
+    return torch.clamp(progress, min=0.0)  # was min=0.5
+
+def penalize_time(env) -> torch.Tensor:
+    # Small penalty every step — makes parking expensive over time
+    return -torch.ones(env.num_envs, device=env.device) * 0.01
+
+def reward_prop_assisted_climb(env) -> torch.Tensor:
+    """Reward prop-assist ONLY when climbing a real step ahead. At T/W~1.2 props
+    assist (unload + tip), not lift. Reward props engaged + moderate pitch + rising,
+    gated to when terrain ahead is higher than the robot (a step), so it doesn't
+    learn to pitch on flat ground."""
+    robot = env.scene["robot"]
+
+    # prop engagement
+    try:
+        lpj = robot.joint_names.index("leftPropeller")
+        rpj = robot.joint_names.index("rightPropeller")
+        prop_active = torch.tanh(robot.data.joint_vel[:, [lpj, rpj]].abs().mean(dim=1) / 200.0)
+    except ValueError:
+        prop_active = torch.ones(robot.num_instances, device=robot.device)
+
+    # moderate pitch, gaussian peak ~0.25 rad (no reward for face-plant pitch)
+    # pitch = robot.data.projected_gravity_b[:, 1].abs()
+    # pitching = torch.exp(-((pitch - 0.25) ** 2) / (2 * 0.10 ** 2))
+    # forward pitch only (negative Y = nose-down toward step, from your spawn data)
+    pitch_signed = -robot.data.projected_gravity_b[:, 1]   # positive when pitched FORWARD
+    pitch_fwd = torch.clamp(pitch_signed, min=0.0)          # 0 if leaning back
+    pitching = torch.exp(-((pitch_fwd - 0.25) ** 2) / (2 * 0.10 ** 2)) * (pitch_fwd > 0.05).float()
+
+    # ---- TEMP AXIS CHECK ----
+    if not hasattr(env, "_pitch_dbg"):
+        env._pitch_dbg_count = 0
+        env._pitch_dbg = True
+    env._pitch_dbg_count = getattr(env, "_pitch_dbg_count", 0) + 1
+    if env._pitch_dbg_count % 20 == 0:  # print every 20 steps to avoid spam
+        pg = robot.data.projected_gravity_b[0]  # env 0, all 3 components
+        print(f"[PITCH AXIS] proj_grav=[{pg[0]:.3f}, {pg[1]:.3f}, {pg[2]:.3f}]", flush=True)
+    # ---- END TEMP ----
+
+    # rising
+    vz = robot.data.root_lin_vel_w[:, 2]
+    # rising = torch.clamp(vz / 0.2, 0.0, 1.0)
+    rising = torch.clamp((vz + 0.1) / 0.3, 0.0, 1.0)  # small credit even at vz~0, full at 0.2
+
+    # step-ahead gate via 6x6 height grid
+    step_ahead = torch.ones(robot.num_instances, device=robot.device)
+    try:
+        hs = env.scene["height_scanner"]
+        ray_z = torch.nan_to_num(hs.data.ray_hits_w[..., 2], nan=0.0, posinf=0.0, neginf=0.0)  # [envs,36]
+        ground_z = ray_z.median(dim=1)[0]              # flat-majority reference
+        max_ahead = ray_z.max(dim=1)[0]                # highest scanned point
+        step_ahead = torch.clamp((max_ahead - ground_z) / 0.04, 0.0, 1.0)  # 0-1, sat at 4cm
+    except (KeyError, ValueError, IndexError):
+        pass  # no scanner -> gate stays 1 (fallback)
+
+    return prop_active * pitching * rising * step_ahead
+
+# def penalize_excessive_pitch(env, max_pitch: float = 0.4) -> torch.Tensor:
+#     """Penalize body pitching too far forward (face-plant), EVERYWHERE — flat or step."""
+#     robot = env.scene["robot"]
+#     pitch = robot.data.projected_gravity_b[:, 1].abs()
+#     return -torch.clamp(pitch - max_pitch, min=0.0)
+
+def penalize_not_upright(env, upright_tol: float = 0.08) -> torch.Tensor:
+    """Penalize body tilt from upright in ANY direction (forward/back/roll).
+    Deadzone: small tilts free (climbing needs some), significant tilt penalized."""
+    robot = env.scene["robot"]
+    uprightness = -robot.data.projected_gravity_b[:, 2]  # 1=upright, <1 tilted
+    tilt = torch.clamp(1.0 - uprightness, min=0.0)
+    # deadzone: no penalty until tilt exceeds upright_tol (~allows moderate climbing pitch)
+    return -torch.clamp(tilt - upright_tol, min=0.0)
+
+def reward_climb_transition(env) -> torch.Tensor:
+    """Dense reward concentrated at the pitch-onto-step moment:
+    near target + gaining height + props active + upright.
+    This is the 0.3s window where prop-assist must engage."""
+    robot = env.scene["robot"]
+    cmd_term = env.command_manager._terms.get("base_velocity")
+    if cmd_term is None or not hasattr(cmd_term, "current_targets_w"):
+        return torch.zeros(robot.num_instances, device=robot.device)
+
+    spawn_z = env.scene.env_origins[:, 2]
+    height_above = robot.data.root_pos_w[:, 2] - spawn_z
+
+    # in the climb band: off the ground but not yet at full target height
+    in_climb_band = ((height_above > 0.02) & (height_above < 0.15)).float()
+
+    # near the target XY
+    target_xy = cmd_term.current_targets_w[:, :2]
+    robot_xy = robot.data.root_pos_w[:, :2]
+    dist = torch.norm(robot_xy - target_xy, dim=1)
+    near = torch.exp(-dist / 1.0)
+
+    # props active
+    try:
+        lp = robot.joint_names.index("leftPropeller")
+        rp = robot.joint_names.index("rightPropeller")
+        prop = torch.tanh(robot.data.joint_vel[:, [lp, rp]].abs().mean(dim=1) / 200.0)
+    except (ValueError, IndexError):
+        prop = torch.zeros_like(dist)
+
+    # upright (not toppling)
+    upright = torch.clamp(-robot.data.projected_gravity_b[:, 2], min=0.0)
+
+    # rising
+    rising = torch.clamp(robot.data.root_lin_vel_w[:, 2], min=0.0)
+
+    return in_climb_band * near * prop * upright * rising
+
+def penalize_thrust_forward_at_step(env) -> torch.Tensor:
+    """Penalize thrust pointing forward/horizontal ONLY when at a step (climbing context).
+    On flat ground, props can point however they help navigation — not penalized.
+    At a step, forward thrust (shoving into the riser) is penalized, forcing props up to climb."""
+    robot = env.scene["robot"]
+    lp = robot.body_names.index("leftPropeller")
+    rp = robot.body_names.index("rightPropeller")
+    prop_ids = torch.tensor([lp, rp], device=robot.device)
+    prop_quat = robot.data.body_quat_w[:, prop_ids, :]
+    thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
+    thrust_local[:, :, 2] = 1.0
+    thrust_world = quat_apply(prop_quat, thrust_local)
+    z_frac = thrust_world[:, :, 2].mean(dim=1)
+
+    lpj = robot.joint_names.index("leftPropeller")
+    rpj = robot.joint_names.index("rightPropeller")
+    prop_active = torch.tanh(robot.data.joint_vel[:, [lpj, rpj]].abs().mean(dim=1) / 200.0)
+
+    # step-ahead gate: only force props-up when there's a step to climb
+    step_ahead = torch.zeros(robot.num_instances, device=robot.device)
+    try:
+        hs = env.scene["height_scanner"]
+        ray_z = torch.nan_to_num(hs.data.ray_hits_w[..., 2], nan=0.0, posinf=0.0, neginf=0.0)
+        step_ahead = torch.clamp((ray_z.max(dim=1)[0] - ray_z.median(dim=1)[0]) / 0.04, 0.0, 1.0)
+    except (KeyError, ValueError, IndexError):
+        pass
+
+    forward_shortfall = torch.clamp(1.0 - z_frac, 0.0, 2.0)
+    # penalize forward thrust ONLY when props active AND at a step
+    return -(forward_shortfall * prop_active * step_ahead)
+
+def penalize_action_rate(env) -> torch.Tensor:
+    """Penalize CHANGE in action between steps (not magnitude). Forces smooth, gradual
+    control instead of bang-bang max-thrust jerks that topple the robot when props fire."""
+    if not hasattr(env, "_prev_action") or env._prev_action.shape[0] != env.action_manager.action.shape[0]:
+        env._prev_action = env.action_manager.action.clone()
+        return torch.zeros(env.action_manager.action.shape[0], device=env.action_manager.action.device)
+    rate = torch.sum(torch.square(env.action_manager.action - env._prev_action), dim=1)
+    env._prev_action = env.action_manager.action.clone()
+    return -rate
+
+def reward_props_upright(env) -> torch.Tensor:
+    """Small reward for props pointing upward at any time — not just at steps.
+    Encourages the policy to keep props in an upright position generally."""
+    robot = env.scene["robot"]
+    try:
+        lp = robot.body_names.index("leftPropeller")
+        rp = robot.body_names.index("rightPropeller")
+        prop_ids = torch.tensor([lp, rp], device=robot.device)
+        prop_quat = robot.data.body_quat_w[:, prop_ids, :]
+        thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
+        thrust_local[:, :, 2] = 1.0
+        from isaaclab.utils.math import quat_apply
+        thrust_world = quat_apply(prop_quat, thrust_local)
+        z_frac = torch.clamp(thrust_world[:, :, 2].mean(dim=1), 0.0, 1.0)
+        return z_frac ** 2   # sharpened — rewards genuinely vertical more than partial
+    except (ValueError, IndexError):
+        return torch.zeros(robot.num_instances, device=robot.device)
+
+def reward_thrust_up_when_pitched(env) -> torch.Tensor:
+    """Reward props pointing UP scaled by how much the robot is pitched forward.
+    The more it pitches (about to fall forward), the more it's rewarded for having
+    props up to catch it. Teaches props to react to the forward pitch."""
+    robot = env.scene["robot"]
+    lp = robot.body_names.index("leftPropeller")
+    rp = robot.body_names.index("rightPropeller")
+    prop_ids = torch.tensor([lp, rp], device=robot.device)
+    prop_quat = robot.data.body_quat_w[:, prop_ids, :]
+    thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
+    thrust_local[:, :, 2] = 1.0
+    thrust_world = quat_apply(prop_quat, thrust_local)
+    z_frac = torch.clamp(thrust_world[:, :, 2].mean(dim=1), 0.0, 1.0)
+
+    # forward pitch magnitude (Y axis for +Y robot)
+    pitch_fwd = torch.clamp(robot.data.projected_gravity_b[:, 1].abs(), 0.0, 1.0)
+
+    # reward props-up SCALED by forward pitch: pitched forward + props up = high reward
+    return z_frac * pitch_fwd
+
+def penalize_thrust_pointing_down(env) -> torch.Tensor:
+    """Penalize thrust pointing DOWN (negative world-Z). The servo over-tilts past
+    vertical, swinging thrust past 'up' into pointing down/back (z_frac seen at -0.41),
+    which shoves the robot into/down the step. This penalizes that overshoot so the
+    policy keeps thrust at or above horizontal, not past vertical into down-pointing."""
+    robot = env.scene["robot"]
+    lp = robot.body_names.index("leftPropeller")
+    rp = robot.body_names.index("rightPropeller")
+    prop_ids = torch.tensor([lp, rp], device=robot.device)
+    prop_quat = robot.data.body_quat_w[:, prop_ids, :]
+    thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
+    thrust_local[:, :, 2] = 1.0
+    thrust_world = quat_apply(prop_quat, thrust_local)
+    z_frac_raw = thrust_world[:, :, 2].mean(dim=1)  # NOT clamped — can be negative
+
+    # props actually spinning (only penalize direction when producing thrust)
+    lpj = robot.joint_names.index("leftPropeller")
+    rpj = robot.joint_names.index("rightPropeller")
+    prop_active = torch.tanh(robot.data.joint_vel[:, [lpj, rpj]].abs().mean(dim=1) / 200.0)
+
+    # penalty grows as thrust points down (z_frac negative)
+    penalty_down = torch.clamp(-z_frac_raw, min=0.0)  # 0 if up/horizontal, >0 if pointing down
+    return -(penalty_down * prop_active)
+
+def reward_prop_thrust_when_climbing(env) -> torch.Tensor:
+    """Reward actually PRODUCING upward thrust during a climb — not just pointing props up.
+    The props point up but idle; this rewards spinning them to produce real upward force
+    at a step, so the assist actually happens."""
+    robot = env.scene["robot"]
+    lpj = robot.joint_names.index("leftPropeller")
+    rpj = robot.joint_names.index("rightPropeller")
+    # prop speed (higher = more thrust)
+    prop_speed = robot.data.joint_vel[:, [lpj, rpj]].abs().mean(dim=1)
+    prop_speed_norm = torch.clamp(prop_speed / 200.0, 0.0, 1.0)  # normalized
+
+    # thrust direction up
+    lp = robot.body_names.index("leftPropeller")
+    rp = robot.body_names.index("rightPropeller")
+    prop_ids = torch.tensor([lp, rp], device=robot.device)
+    prop_quat = robot.data.body_quat_w[:, prop_ids, :]
+    thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
+    thrust_local[:, :, 2] = 1.0
+    thrust_world = quat_apply(prop_quat, thrust_local)
+    z_frac = torch.clamp(thrust_world[:, :, 2].mean(dim=1), 0.0, 1.0)
+
+    # at a step
+    step_ahead = torch.ones(robot.num_instances, device=robot.device)
+    try:
+        hs = env.scene["height_scanner"]
+        ray_z = torch.nan_to_num(hs.data.ray_hits_w[..., 2], nan=0.0, posinf=0.0, neginf=0.0)
+        step_ahead = torch.clamp((ray_z.max(dim=1)[0] - ray_z.median(dim=1)[0]) / 0.04, 0.0, 1.0)
+    except (KeyError, ValueError, IndexError):
+        pass
+
+    # reward: spinning props HARD, pointed up, at a step = real upward assist
+    return prop_speed_norm * z_frac * step_ahead
 
 @configclass
 class RewardsCfg:
@@ -610,8 +1059,9 @@ class RewardsCfg:
     
     energy_consumption = RewTerm(
         func=penalize_energy_consumption,
-        weight=0.05,
+        weight=0.25, # WASS 0.1
     )
+
     """Penalty for total energy consumption from propellers and wheels.
     Uses PWM-to-Power model for propellers and RPM-to-Power model for wheels.
     Computes total power (W) and multiplies by dt to get energy per step (J).
@@ -629,7 +1079,7 @@ class RewardsCfg:
     
     penalize_facing_mismatch = RewTerm(
         func=penalize_facing_direction_mismatch,
-        weight=0.3,
+        weight=0.5,
     )
     """Penalty for mismatch between robot facing direction and target direction.
     Reads angle error directly from vel_command_b[:, 2] (normalized angle error in [-1, 1]).
@@ -637,7 +1087,7 @@ class RewardsCfg:
     
     penalize_rotation = RewTerm(
         func=penalize_tilt_angle,
-        weight=0.3,
+        weight=1.0,
     )
     """Penalty for excessive tilt angle (roll/pitch deviation from upright).
     Uses projected gravity to measure tilt. Strongly penalizes large roll/pitch angles
@@ -650,14 +1100,11 @@ class RewardsCfg:
     """Penalty for excessive linear speed above 3 m/s threshold.
     Prevents dangerous high-speed movement. Only active when speed exceeds threshold."""
 
-    
-    
-    
     # ========== Terminal Rewards ==========
     
     terminal_goal_reached = RewTerm(
         func=terminal_reward_goal_reached,
-        weight=1.0,
+        weight=10.0, # was 1.0
     )
     """Terminal reward for successfully reaching the goal.
     Returns +10.0 when robot reaches the goal (episode ends due to goal_reached constraint).
@@ -665,7 +1112,7 @@ class RewardsCfg:
     
     terminal_propeller_collision = RewTerm(
         func=terminal_reward_propeller_collision,
-        weight=1.0,
+        weight=3.0, # WASS 2.0
     )
     """Terminal reward (penalty) for propeller collision.
     Returns -10.0 when propellers collide (episode ends due to propeller_collision constraint).
@@ -681,12 +1128,104 @@ class RewardsCfg:
 
     
 
-    # action_smoothness = RewTerm(
-    #     func=lambda env: -torch.sum(torch.square(env.action_manager.action), dim=1),
-    #     weight=0.001,
-    # )
-    # """Penalize large action magnitudes to encourage smooth, energy-efficient control."""
+    action_smoothness = RewTerm(
+        func=lambda env: -torch.sum(torch.square(env.action_manager.action), dim=1),
+        weight=0.005,
+    )
 
+    # The jerkiness — if you want to address it, action_smoothness (magnitude penalty) is the wrong tool; you'd need an action-rate penalty (penalize action - last_action). But don't add that now — it's another term in an already-overloaded run.
+    """Penalize large action magnitudes to encourage smooth, energy-efficient control."""
+    
+    penalize_stalling_near_target = RewTerm(
+        func=penalize_stalling_near_target,
+        weight=1.0,
+    )
+    
+    penalize_time = RewTerm(
+        func=penalize_time,
+        weight=1.5,
+    )
+
+    penalize_thrust_pointing_down = RewTerm(
+        func=penalize_thrust_pointing_down,
+        weight=3.0, # was 2.0
+    )
+    
+    penalize_thrust_forward_at_step =RewTerm(
+        func=penalize_thrust_forward_at_step,
+        weight=1.0, # was 0.5
+    )
+
+    penalize_prolonged_no_progress = RewTerm(
+        func=penalize_prolonged_no_progress,
+        weight=0.5,
+    )
+
+    penalize_not_upright = RewTerm(
+        func=penalize_not_upright,
+        weight=4.5, # WASS 2.5
+    )
+
+    penalize_action_rate = RewTerm(
+        func=penalize_action_rate,
+        weight=0.1,
+    )
+    
+    penalize_cross_track_error = RewTerm(
+        func=penalize_cross_track_error,
+        weight=0.5,
+    )
+
+    reward_climb_progress = RewTerm(
+        func=reward_climb_progress,
+        weight=2.0, # WASS 0.5
+    )
+
+    reward_forward_progress = RewTerm(
+        func=reward_forward_progress,
+        weight=2.0,
+    )
+
+    reward_progress_to_target = RewTerm(
+        func=reward_progress_to_target,
+        weight=10.0,
+    )
+
+    reward_stable_after_climb = RewTerm(
+        func=reward_stable_after_climb,
+        weight=2.0,
+    )
+
+    reward_thrust_up_at_step = RewTerm(
+        func=reward_thrust_up_at_step,
+        weight=5.0, # WASS 3.0
+    )
+
+    reward_props_upright = RewTerm(
+        func=reward_props_upright,
+        weight=1.5, # WASS 0.5
+    )
+
+    # reward_climb_transition = RewTerm(
+    #     func=reward_climb_transition,
+    #     weight=1.5,
+    # )
+
+    # reward_thrust_up_when_pitched = RewTerm(
+    #     func=reward_thrust_up_when_pitched,
+    #     weight=1.5,
+    # )    
+
+    reward_prop_thrust_when_climbing = RewTerm(
+        func=reward_prop_thrust_when_climbing,
+        weight=2.5,
+    )
+
+
+    reward_prop_catch_when_falling = RewTerm(
+        func=reward_prop_catch_when_falling,
+        weight=0.3,
+    )
 
 @configclass
 class RewardsCfgInvertedPendulum(RewardsCfg):
