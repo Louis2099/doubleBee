@@ -154,7 +154,7 @@ class DoubleBeeVelocityEnvCfg(ManagerBasedConstraintRLEnvCfg):
         goal_reached = ConstrTerm(
             func=mdp_constraints.goal_reached,
             params={
-                "distance_threshold": 0.2,  # Distance in meters to consider goal reached
+                "distance_threshold": 0.25,  # Distance in meters to consider goal reached
             },
             time_out="terminate",  # Hard termination when goal is reached
         )

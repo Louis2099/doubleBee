@@ -60,16 +60,16 @@ DOUBLEBEE_CFG = ArticulationCfg(
         "wheels": DelayedPDActuatorCfg(
             joint_names_expr=["leftWheel", "rightWheel"],
             effort_limit=1.0,  # Adjust based on your motor specs
-            velocity_limit=200.0,
-            min_delay=0,
-            max_delay=0,
+            velocity_limit=35.0,
+            min_delay=1,
+            max_delay=3,
             stiffness={
                 "leftWheel": 0.0,   # Wheels typically have no stiffness
                 "rightWheel": 0.0,
             },
             damping={
-                "leftWheel": 10000,   # Some damping for wheel friction
-                "rightWheel": 10000,
+                "leftWheel": 100, # 87.0
+                "rightWheel": 100, # 87.0
             },
             friction={
                 "leftWheel": 0.0,
@@ -86,8 +86,8 @@ DOUBLEBEE_CFG = ArticulationCfg(
             joint_names_expr=["leftPropellerServo", "rightPropellerServo"],
             effort_limit=5.0,  # Lower effort for servo motors
             velocity_limit=2.0,
-            min_delay=0,
-            max_delay=0,
+            min_delay=2, # guessed, in sim steps at 0.02s = 40-100ms lag
+            max_delay=5, # guessed
             stiffness={
                 "leftPropellerServo": 50000,  # High stiffness for precise control
                 "rightPropellerServo": 50000,

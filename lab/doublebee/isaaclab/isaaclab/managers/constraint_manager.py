@@ -83,6 +83,7 @@ class ConstraintManager(ManagerBase):
         # create buffers for managing constraint signals as float tensors
         self._truncated_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
         self._delta_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
+        self._pending_reset_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
 
 
     def __str__(self) -> str:
@@ -155,6 +156,9 @@ class ConstraintManager(ManagerBase):
         for key in self._probs.keys():
             self._probs[key][env_ids] = 0.0  # 환경별 초기화
 
+        # Clear pending reset buffer after the env has actually been reset
+        self._pending_reset_buf[env_ids] = 0.0
+
         # reset all the constraints terms
         for term_cfg in self._class_term_cfgs:
             term_cfg.func.reset(env_ids=env_ids)
@@ -174,6 +178,8 @@ class ConstraintManager(ManagerBase):
         self._truncated_buf.zero_()
         self._delta_buf.zero_()
 
+        # Snapshot envs already pending reset so terminate terms don't re-fire for them
+        pending = self._pending_reset_buf.clone()
 
         for name, term_cfg in zip(self._term_names, self._term_cfgs):
             value = term_cfg.func(self._env, **term_cfg.params).float()
@@ -197,6 +203,8 @@ class ConstraintManager(ManagerBase):
                 value = torch.clamp(value, 0.0, 1.0)
                 if not torch.all((value == 0.0) | (value == 1.0)):
                     raise ValueError("value must be either 0 or 1.")
+                # Suppress re-firing for envs already pending reset from a prior step
+                value = value * (1.0 - pending)
                 self._delta_buf = torch.max(self._delta_buf, value)
                 self._term_values[name][:] = value
             elif term_cfg.time_out == "constraint":
@@ -230,6 +238,9 @@ class ConstraintManager(ManagerBase):
                 self._delta_buf = torch.max(self._delta_buf, probs)
 
                 self._term_values[name][:] = value
+        
+        # Mark envs that triggered termination this step as pending reset
+        self._pending_reset_buf = torch.max(self._pending_reset_buf, self._delta_buf)
 
         reset_buf = torch.max(self._truncated_buf, self._delta_buf)
 

@@ -55,7 +55,26 @@ class ReplayMemory:
         dones = self.done_buffer[idxs]
 
         return states, actions, rewards, next_states, dones
+    
+    def state_dict(self):
+        return {
+            "state_buffer": self.state_buffer,
+            "action_buffer": self.action_buffer,
+            "reward_buffer": self.reward_buffer,
+            "next_state_buffer": self.next_state_buffer,
+            "done_buffer": self.done_buffer,
+            "position": self.position,
+            "size": self.size,
+        }
 
+    def load_state_dict(self, d):
+        self.state_buffer.copy_(d["state_buffer"])
+        self.action_buffer.copy_(d["action_buffer"])
+        self.reward_buffer.copy_(d["reward_buffer"])
+        self.next_state_buffer.copy_(d["next_state_buffer"])
+        self.done_buffer.copy_(d["done_buffer"])
+        self.position = d["position"]
+        self.size = d["size"]
 
 class TACOReplayMemory:
     def __init__(self, num_envs, state_dim, action_dim, device, capacity):

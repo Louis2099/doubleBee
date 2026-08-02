@@ -20,6 +20,64 @@ from scripts.co_rl.core.env import VecEnv
 from scripts.co_rl.core.modules import ReplayMemory
 from scripts.co_rl.core.utils import store_code_state
 
+# class ActionDelayBuffer:
+#     """Per-env action delay buffer for sim-to-real DR.
+    
+#     Each env gets a randomly sampled delay (in steps). push_and_get() stores
+#     the latest action and returns the action from delay_steps ago.
+#     On reset, the delayed actions for those envs are zeroed so the robot
+#     doesn't execute stale pre-reset actions after respawn.
+    
+#     Args:
+#         num_envs: Number of parallel environments.
+#         action_dim: Dimension of the action vector.
+#         max_delay: Maximum delay in steps (buffer size = max_delay + 1).
+#         delay_steps: Per-env delay in steps. Shape [num_envs], dtype long.
+#         device: Torch device.
+#     """
+#     def __init__(self, num_envs: int, action_dim: int, max_delay: int,
+#                  delay_steps: torch.Tensor, device: torch.device):
+#         self.max_delay = max_delay
+#         self.delay_steps = delay_steps.long().to(device)   # [num_envs]
+#         # Circular buffer: shape [max_delay+1, num_envs, action_dim]
+#         self.buf = torch.zeros(max_delay + 1, num_envs, action_dim, device=device)
+#         self.ptr = 0  # points to the slot we write into next
+
+#     def push_and_get(self, action: torch.Tensor) -> torch.Tensor:
+#         """Store current action, return per-env delayed action.
+        
+#         Args:
+#             action: Current actions. Shape [num_envs, action_dim].
+#         Returns:
+#             Delayed actions. Shape [num_envs, action_dim].
+#         """
+#         # Write current action into buffer at ptr
+#         self.buf[self.ptr] = action
+
+#         # For each env, read from (ptr - delay) mod buffer_size
+#         # delay_steps[i] steps ago = slot (ptr - delay_steps[i]) % buf_size
+#         buf_size = self.max_delay + 1
+#         read_ptrs = (self.ptr - self.delay_steps) % buf_size  # [num_envs]
+
+#         # Gather: for each env i, read buf[read_ptrs[i], i, :]
+#         # read_ptrs: [num_envs] → expand to [num_envs, 1, action_dim] for gather
+#         idx = read_ptrs.view(-1, 1, 1).expand(-1, 1, action.shape[1])  # [num_envs, 1, action_dim]
+#         delayed = self.buf.permute(1, 0, 2).gather(1, idx).squeeze(1)  # [num_envs, action_dim]
+
+#         # Advance pointer
+#         self.ptr = (self.ptr + 1) % buf_size
+
+#         return delayed
+
+#     def reset(self, env_ids: torch.Tensor):
+#         """Zero out buffer for reset envs so stale pre-reset actions aren't executed."""
+#         self.buf[:, env_ids, :] = 0.0
+#         # Optionally resample per-env delay on reset for DR variety:
+#         self.delay_steps[env_ids] = torch.randint(
+#             low=1, high=self.max_delay + 1,
+#             size=(len(env_ids),),
+#             device=self.delay_steps.device
+#         )
 
 class OffPolicyRunner:
     """Off-policy runner for training and evaluation."""
@@ -110,6 +168,28 @@ class OffPolicyRunner:
                 self.env.episode_length_buf, high=int(self.env.max_episode_length)
             )
         obs, extras = self.env.get_observations()
+
+        # Action delay DR — randomize delay per env between min/max steps
+        # Matches sysid: M1=5.6ms, M2=2.6ms at 5ms sim dt → 1-3 steps
+        # _delay_steps = torch.randint(
+        #     low=1, high=4,  # [1, 3] steps uniformly per env
+        #     size=(self.num_envs,),
+        #     device=self.device
+        # )
+        # self._action_delay_buffer = ActionDelayBuffer(
+        #     num_envs=self.num_envs,
+        #     action_dim=self.env.num_actions,
+        #     max_delay=3,
+        #     delay_steps=_delay_steps,
+        #     device=self.device,
+        # )
+
+        # # Pre-fill buffer with initial action so first steps aren't zeros
+        # with torch.no_grad():
+        #     init_actions = self.alg.act_inference(obs.to(self.device))
+        #     for _ in range(3):  # fill all slots
+        #         self._action_delay_buffer.push_and_get(init_actions)
+                
         obs = obs.to(self.device)
 
         self.train_mode()  # switch to train mode (for dropout for example)
@@ -128,7 +208,8 @@ class OffPolicyRunner:
             for i in range(self.num_steps_per_env):
                 self.total_steps += self.num_envs
                 actions = self.alg.act(obs, self.total_steps)
-
+                # delayed_actions = self._action_delay_buffer.push_and_get(actions)
+                # next_obs, rewards, dones, infos = self.env.step(delayed_actions.to(self.env.device))
                 next_obs, rewards, dones, infos = self.env.step(actions.to(self.env.device))
                 # These new variables are in self.env.device (mostly in cuda:0)
 
@@ -139,6 +220,10 @@ class OffPolicyRunner:
 
                 # process the step
                 self.alg.process_env_step(obs, actions, rewards, next_obs, dones)
+                # self.alg.process_env_step(obs, delayed_actions, rewards, next_obs, dones)
+                # reset_mask = (dones > 0)
+                # if reset_mask.any():
+                #     self._action_delay_buffer.reset(reset_mask.nonzero(as_tuple=True)[0])
                 obs = next_obs
 
                 if self.log_dir is not None:
@@ -164,8 +249,16 @@ class OffPolicyRunner:
                 # Learning step
                 start = stop
 
-            if self.total_steps > self.alg.update_after:
-                self.alg.update(update_cnt=self.num_steps_per_env) # * self.env.num_envs
+            # if self.total_steps > self.alg.update_after:
+                # self.alg.update(update_cnt=self.num_steps_per_env) # * self.env.num_envs
+            
+            # if len(self.alg.buffer) > self.alg.update_after:   # or self.alg.buffer.size, check attr
+            #     self.alg.update(update_cnt=self.num_steps_per_env)
+
+            # print(f"[DEBUG] buffer.size: {self.alg.buffer.size}, update_after: {self.alg.update_after}")
+
+            if self.alg.buffer.size > 50000:   # ~25 iters of fill at 2048 envs before updating
+                self.alg.update(update_cnt=self.num_steps_per_env)
 
             stop = time.time()
             learn_time = stop - start
@@ -328,6 +421,9 @@ class OffPolicyRunner:
             "actor_optimizer_state_dict": self.alg.actor_optimizer.state_dict(),
             "critic_optimizer_state_dict": self.alg.critic_optimizer.state_dict(),
             "iter": self.current_learning_iteration,
+            "total_steps": self.total_steps,
+            "replay_buffer": self.alg.buffer.state_dict(),
+            "log_alpha": self.alg.log_alpha.detach(),
             "infos": infos,
         }
         torch.save(saved_dict, path)
@@ -338,12 +434,25 @@ class OffPolicyRunner:
     def load(self, path, load_optimizer=True):
         loaded_dict = torch.load(path)
         self.alg.actor.load_state_dict(loaded_dict["actor_state_dict"])
-        # self.alg.critic.load_state_dict(loaded_dict["critic_state_dict"])
-        # self.alg.target_critic.load_state_dict(loaded_dict["target_critic_state_dict"])
+        self.alg.critic.load_state_dict(loaded_dict["critic_state_dict"])           # uncomment
+        self.alg.target_critic.load_state_dict(loaded_dict["target_critic_state_dict"])  # uncomment
         if load_optimizer:
             self.alg.actor_optimizer.load_state_dict(loaded_dict["actor_optimizer_state_dict"])
-            # self.alg.critic_optimizer.load_state_dict(loaded_dict["critic_optimizer_state_dict"])
+            self.alg.critic_optimizer.load_state_dict(loaded_dict["critic_optimizer_state_dict"])  # uncomment
         self.current_learning_iteration = loaded_dict["iter"]
+        self.total_steps = loaded_dict.get("total_steps", 0)
+
+        # if "replay_buffer" in loaded_dict:
+        #     self.alg.buffer.load_state_dict(loaded_dict["replay_buffer"])
+
+        # In load(), if checkpoint predates log_alpha saving, set it low manually
+        if "log_alpha" in loaded_dict:
+            with torch.no_grad():
+                self.alg.log_alpha.copy_(loaded_dict["log_alpha"])
+        else:
+            with torch.no_grad():
+                self.alg.log_alpha.fill_(-2.0)  # exp(-2)=0.135, low exploration for fine-tuning       
+
         return loaded_dict["infos"]
 
     def get_inference_policy(self, device=None):

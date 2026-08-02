@@ -289,7 +289,21 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
             self.event_manager.apply(mode="interval", dt=self.step_dt)
         # -- compute observations
         # note: done after reset to get the correct observations for reset envs
+        # self.obs_buf = self.observation_manager.compute()
+
+        # return observations, rewards, resets and extras
+        # return self.obs_buf, self.reward_buf, self.reset_delta, self.reset_time_outs, self.extras
+        # -- compute observations
+        # note: done after reset to get the correct observations for reset envs
         self.obs_buf = self.observation_manager.compute()
+
+        # --- 20ms observation delay (1 step ring buffer) ---
+        if not hasattr(self, "_obs_delay_buffer"):
+            self._obs_delay_buffer = {k: v.clone() for k, v in self.obs_buf.items()}
+        delayed_obs = {k: v.clone() for k, v in self._obs_delay_buffer.items()}
+        self._obs_delay_buffer = {k: v.clone() for k, v in self.obs_buf.items()}
+        self.obs_buf = delayed_obs
+        # --- end obs delay ---
 
         # return observations, rewards, resets and extras
         return self.obs_buf, self.reward_buf, self.reset_delta, self.reset_time_outs, self.extras
