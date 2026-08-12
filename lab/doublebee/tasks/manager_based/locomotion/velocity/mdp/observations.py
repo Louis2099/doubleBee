@@ -337,7 +337,7 @@ class ObservationsCfg:
         # 3. Terrain Perception (Elevation map)
         # ========================================
         
-        # Height scan - 6x6 grid showing terrain elevation around robot
+        # Height scan - 4x4 grid showing terrain elevation around robot
         height_scan = ObsTerm(
             func=height_scan,
             params={
