@@ -111,8 +111,19 @@ DOUBLEBEE_CFG = ArticulationCfg(
             joint_names_expr=["leftPropeller", "rightPropeller"],
             effort_limit=5.0,  
             velocity_limit=600.0,  # Increased velocity limit
-            min_delay=0,
-            max_delay=0,
+            # Propellers are the BALANCE actuator and have the longest real lag
+            # in the whole chain: MAVLink hop + ESC response + propeller spin-up
+            # from idle to hover thrust, which measures ~100-200 ms. These were
+            # 0/0, i.e. instantaneous thrust, while the servos already carried
+            # 2/5. That mismatch is the direct cause of the divergence seen on
+            # hardware 2026-08-21 (transfer3.csv): the policy recovered 69 deg of
+            # lean under thrust, overshot straight through vertical to +11 deg,
+            # then oscillated apart -- the classic signature of a balance loop
+            # tuned with less delay than it actually has.
+            # 2-5 steps at the 20 ms control period = 40-100 ms, randomised per
+            # reset so the policy cannot latch onto one exact delay.
+            min_delay=2,
+            max_delay=5,
             stiffness={
                 "leftPropeller": 0.0,  # No stiffness for velocity control
                 "rightPropeller": 0.0,
