@@ -95,11 +95,11 @@ class DoubleBeeEventsCfg:
     # )
 
     # Domain randomization: thrust output ±20% per env per propeller (sampled at reset)
-    sample_thrust_scale_dr = EventTerm(
-        func=aerodynamics.sample_thrust_scale_dr,
-        mode="reset",
-        params={"range_low": 0.8, "range_high": 1.2, "num_propellers": 2},
-    )
+    # sample_thrust_scale_dr = EventTerm(
+    #     func=aerodynamics.sample_thrust_scale_dr,
+    #     mode="reset",
+    #     params={"range_low": 0.8, "range_high": 1.2, "num_propellers": 2},
+    # )
 
     # NOTE: Reset/spawn is controlled here. Position is sampled from terrain "init_pos" flat patches.
     # - pose_range: roll, pitch, yaw in rad. Only orientation is randomized (position from terrain).
@@ -135,14 +135,14 @@ class DoubleBeeEventsCfg:
     # CRITICAL: Reset joints to default positions to prevent error accumulation
     # Without this, joints retain their previous state, causing PD controller to
     # try to move from reset position to previous target, accumulating error
-    reset_robot_joints = EventTerm(
-        func=mdp.reset_joints_by_offset,
-        mode="reset",
-        params={
-            "position_range": (-0.0, 0.0),  # Reset to exact default positions (0.0 for all joints)
-            "velocity_range": (0.0, 0.0),  # Reset to zero velocity
-        },
-    )
+    # reset_robot_joints = EventTerm(
+    #     func=mdp.reset_joints_by_offset,
+    #     mode="reset",
+    #     params={
+    #         "position_range": (-0.0, 0.0),  # Reset to exact default positions (0.0 for all joints)
+    #         "velocity_range": (0.0, 0.0),  # Reset to zero velocity
+    #     },
+    # )
 
     # randomize_robot_mass = EventTerm(
     #     func=randomize_rigid_body_mass,
@@ -169,11 +169,11 @@ class DoubleBeeEventsCfg:
     #     mode="reset",
     #     params={
     #         "asset_cfg": SceneEntityCfg("robot", body_names=["body"]),
-    #         "com_distribution_params": (-0.01, 0.01),  # ±1cm COM offset, 0.003!
+    #         "com_distribution_params": (-0.003, 0.003),  # ±1cm COM offset
     #         "operation": "add",
     #         "distribution": "uniform",
     #     },
-    # )
+    # ) # WASS 0.01
 
     # push_robot = EventTerm(
     #     func=push_by_setting_velocity,
@@ -181,14 +181,14 @@ class DoubleBeeEventsCfg:
     #     interval_range_s=(3.0, 6.0),   # was (8,15) — more frequent so policy sees many slow tilts
     #     params={
     #         "velocity_range": {
-    #             "x": (-0.2, 0.2),    # keep gentle
-    #             "y": (-0.2, 0.2),
+    #             "x": (-0.05, 0.05),    # keep gentle
+    #             "y": (-0.05, 0.05),
     #             # add a small angular component to induce actual tilt, not just translation
-    #             "roll": (-0.2, 0.2),   # gentle tilt rates → slow tilts the servo must respond to
-    #             "pitch": (-0.2, 0.2),
+    #             "roll": (-0.05, 0.05),   # gentle tilt rates → slow tilts the servo must respond to
+    #             "pitch": (-0.05, 0.05),
     #         },
     #     },
-    # )
+    # ) # WASS 0.2
 
     # randomize_joint_actuator_gains = EventTerm(
     #     func=randomize_actuator_gains,

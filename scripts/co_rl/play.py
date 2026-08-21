@@ -419,7 +419,7 @@ def main():
                 print("[INFO] To enable ONNX export, install: pip install onnx")
     
     # export environment to pdf
-    export_env_as_pdf(yaml_path=os.path.join(log_dir, "params", "env.yaml"), pdf_path=os.path.join(export_model_dir, "env.pdf"))
+    # export_env_as_pdf(yaml_path=os.path.join(log_dir, "params", "env.yaml"), pdf_path=os.path.join(export_model_dir, "env.pdf"))
 
     # Check if this is a doubleBee velocity tracking task
     is_doublebee_velocity = isinstance(env.unwrapped, ManagerBasedConstraintRLEnv) and "doublebee" in args_cli.task.lower() and "velocity" in args_cli.task.lower()

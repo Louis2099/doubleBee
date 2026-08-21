@@ -59,8 +59,8 @@ DOUBLEBEE_CFG = ArticulationCfg(
         # Wheel actuators - for ground locomotion
         "wheels": DelayedPDActuatorCfg(
             joint_names_expr=["leftWheel", "rightWheel"],
-            effort_limit=1.0,  # Adjust based on your motor specs
-            velocity_limit=35.0,
+            effort_limit=0.35,  # Adjust based on your motor specs
+            velocity_limit=23.6,
             min_delay=1,
             max_delay=3,
             stiffness={
@@ -109,7 +109,7 @@ DOUBLEBEE_CFG = ArticulationCfg(
         # Propeller actuators - for thrust generation
         "propellers": DelayedPDActuatorCfg(
             joint_names_expr=["leftPropeller", "rightPropeller"],
-            effort_limit=100.0,  
+            effort_limit=5.0,  
             velocity_limit=600.0,  # Increased velocity limit
             min_delay=0,
             max_delay=0,
