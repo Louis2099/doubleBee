@@ -907,6 +907,67 @@ def reward_props_upright(env) -> torch.Tensor:
     except (ValueError, IndexError):
         return torch.zeros(robot.num_instances, device=robot.device)
 
+def reward_vertical_thrust_support(env, target_frac: float = 0.7) -> torch.Tensor:
+    """Reward the VERTICAL component of total thrust, as a fraction of weight.
+
+    Why this exists (added 2026-08-21 after the hardware divergence):
+
+    The propellers sit ~443 mm above the wheel axle and the CoM ~139 mm above
+    it, so this machine is a SHORT inverted pendulum -- natural fall time
+    constant tau = sqrt(L/g) ~= 119 ms. The real actuator chain (MAVLink -> ESC
+    -> propeller spin-up) carries 40-100 ms of delay. A plant with tau = 119 ms
+    and 70 ms of delay is only marginally stabilisable, which is exactly what
+    hardware showed: the policy recovered 69 deg of lean, overshot through
+    vertical, and diverged.
+
+    Upward thrust offsetting fraction f of weight reduces effective gravity to
+    (1-f)g, stretching tau by 1/sqrt(1-f):
+
+        f = 0.0 -> 119 ms      f = 0.7 -> 217 ms      f = 0.84 -> 297 ms (T/W max)
+
+    So sustained vertical thrust is not a luxury on this airframe -- it is what
+    makes the plant controllable at the delays it actually has. reward_props_upright
+    only rewards the props POINTING up; this rewards them pointing up AND
+    actually pushing, which is the part that buys phase margin.
+
+    Rewards approach to target_frac and does NOT reward beyond it: overshooting
+    toward T/W 1.0 unloads the wheels (normal force -> 0) and costs traction,
+    which the robot still needs for translation. 0.7 leaves ~30% of weight on
+    the wheels while more than doubling the time constant.
+
+    NOTE this fights `energy_consumption` (weight 0.25) by design. Stability
+    first; the energy story is only meaningful for a robot that stays upright.
+    """
+    robot = env.scene["robot"]
+    try:
+        lp = robot.body_names.index("leftPropeller")
+        rp = robot.body_names.index("rightPropeller")
+        prop_ids = torch.tensor([lp, rp], device=robot.device)
+
+        # thrust direction: each propeller's local +z in world frame
+        prop_quat = robot.data.body_quat_w[:, prop_ids, :]
+        thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
+        thrust_local[:, :, 2] = 1.0
+        from isaaclab.utils.math import quat_apply
+        thrust_dir_w = quat_apply(prop_quat, thrust_local)
+
+        # thrust magnitude proxy: |propeller joint velocity| / max, per propeller.
+        # The aerodynamic model is monotonic in |omega| so this is a faithful
+        # ordering even though it is not newtons.
+        joint_ids = [robot.joint_names.index(n) for n in ("leftPropeller", "rightPropeller")]
+        omega = robot.data.joint_vel[:, joint_ids].abs()
+        omega_max = 250.0                                    # matches propeller_vel action span
+        mag = torch.clamp(omega / omega_max, 0.0, 1.0)
+
+        # vertical support fraction: sum over both props of mag * (thrust z-component)
+        vert = (mag * torch.clamp(thrust_dir_w[:, :, 2], 0.0, 1.0)).sum(dim=1) * 0.5
+
+        # saturating reward: climbs to target_frac, flat beyond it
+        return torch.clamp(vert / target_frac, 0.0, 1.0)
+    except (ValueError, IndexError):
+        return torch.zeros(robot.num_instances, device=robot.device)
+
+
 def reward_thrust_up_when_pitched(env) -> torch.Tensor:
     """Reward props pointing UP scaled by how much the robot is pitched forward.
     The more it pitches (about to fall forward), the more it's rewarded for having
@@ -1203,7 +1264,18 @@ class RewardsCfg:
 
     reward_props_upright = RewTerm(
         func=reward_props_upright,
-        weight=1.5, # WASS 0.5
+        weight=5.0, # WAS 1.5 / 0.5. Raised 2026-08-21: measured z_frac ~= 0.41,
+                    # i.e. the props spent most of the episode NOT pointing up.
+    )
+
+    # Added 2026-08-21. Rewards props pointing up *and pushing*, which is what
+    # actually offsets gravity and stretches the pendulum time constant from
+    # 119 ms to ~217 ms -- the margin the real 40-100 ms actuator delay needs.
+    # See reward_vertical_thrust_support for the derivation.
+    reward_vertical_thrust_support = RewTerm(
+        func=reward_vertical_thrust_support,
+        weight=3.0,
+        params={"target_frac": 0.7},
     )
 
     # reward_climb_transition = RewTerm(

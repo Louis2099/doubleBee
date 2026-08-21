@@ -6,11 +6,48 @@
 from __future__ import annotations
 
 import math
+import torch
 import isaaclab.envs.mdp as mdp
+from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
+from isaaclab.managers.action_manager import ActionTerm
 from isaaclab.utils import configclass
 
-# ±45° in rad, for servo position scale so that policy [-1, 1] → [-45°, 45°]
+# Servo position scale: policy [-1, 1] -> [-pi/2, +pi/2] rad.
 SERVO_POS_LIMIT_RAD = math.pi / 2  # 1.57 rad
+
+
+class TiedJointPositionAction(JointPositionAction):
+    """Drive N joints from ONE action dimension.
+
+    A normal JointPositionAction gives one action per joint, so listing two
+    servos costs two action dims and lets the policy pose them independently.
+    This term collapses that to a single dim: the one command is broadcast to
+    every listed joint, and each joint still gets its own scale/offset.
+
+    IMPORTANT: use an EQUAL scale across the joints if you want them tied to
+    the same physical pose. A mirrored scale dict (+pi/2 / -pi/2) would drive
+    them to equal-and-opposite angles, i.e. the arms permanently opposed --
+    which on hardware means one propeller pointing at the ground.
+    """
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        # the base class sized this one-action-per-joint; collapse to a single dim
+        self._raw_actions = torch.zeros(self.num_envs, 1, device=self.device)
+
+    @property
+    def action_dim(self) -> int:
+        return 1
+
+    def process_actions(self, actions: torch.Tensor):
+        self._raw_actions[:] = actions
+        # (N,1) broadcasts against (N,num_joints) scale/offset
+        self._processed_actions = self._raw_actions * self._scale + self._offset
+
+
+@configclass
+class TiedJointPositionActionCfg(mdp.JointPositionActionCfg):
+    class_type: type[ActionTerm] = TiedJointPositionAction
 
 
 @configclass
@@ -94,39 +131,55 @@ class ActionsCfg4D:
     - [3]: propeller: [-1,1] -> [0,1] -> left [0,500] rad/s, right [0,-500] rad/s -> PWM 1000-2000 -> thrust
     """
 
-    # Wheel velocity actions (still separate for differential drive)
+    # Wheel velocity actions (still separate for differential drive).
+    # scale 47 = ~2x the 23.6 rad/s actuator limit. Measured no-load ceiling is
+    # 23.6 rad/s (db_wheels.py duty, 2026-08-20); 2x keeps the top half of the
+    # action range saturated for easy exploration while the lower half stays
+    # genuinely proportional. The old 500 saturated 95% of the range.
     wheel_vel_left = mdp.JointVelocityActionCfg(
         asset_name="robot",
         joint_names=["leftWheel"],
-        scale=500.0,
+        scale=47.0,
         use_default_offset=False,
         preserve_order=True,
     )
     wheel_vel_right = mdp.JointVelocityActionCfg(
         asset_name="robot",
         joint_names=["rightWheel"],
-        scale=-500.0,  # Negative scale for opposite rotation
+        scale=-47.0,  # Negative scale for opposite rotation
         use_default_offset=False,
         preserve_order=True,
     )
 
-    # Single servo action (will be duplicated to left/right with opposite signs)
-    # Using dict to specify different scales for each joint
-    propeller_servo_pos = mdp.JointPositionActionCfg(
+    # TIED servo action: ONE action dim drives BOTH servos to the SAME angle.
+    # Note the scalar scale rather than the old mirrored dict -- see
+    # TiedJointPositionAction. The two arms are physically symmetric, so a
+    # single command is all the policy needs, and it removes the failure mode
+    # where the policy poses them opposed and kills its own lift.
+    propeller_servo_pos = TiedJointPositionActionCfg(
         asset_name="robot",
         joint_names=["leftPropellerServo", "rightPropellerServo"],
-        scale={"leftPropellerServo": SERVO_POS_LIMIT_RAD, "rightPropellerServo": -SERVO_POS_LIMIT_RAD},
+        scale=SERVO_POS_LIMIT_RAD,
         use_default_offset=False,
         preserve_order=True,
     )
 
-    # Single propeller action (will be duplicated to left/right with opposite signs)
-    # Mapping: [0,1] -> left [0,500] rad/s, right [0,-500] rad/s; processed = offset + scale*action
+    # Propeller velocity, one action per propeller (still independent -- the
+    # differential is the only roll authority available).
+    #   processed = offset + scale*action, so this spans 0..250 rad/s per prop.
+    #
+    # HALVED from 250/250 (which spanned 0..500). Rationale: at 4.47 kg the
+    # airframe has T/W 0.84 at full thrust, and every hardware run so far has
+    # been flown with --prop_scale 0.3..0.6 because full authority flips the
+    # robot. Capping thrust HERE instead means the policy learns a strategy that
+    # works at the authority it will actually be given, rather than learning to
+    # rely on thrust that gets attenuated away at deploy time. Deploy with
+    # --prop_scale 1.0 to match.
     propeller_vel = mdp.JointVelocityActionCfg(
         asset_name="robot",
         joint_names=["leftPropeller", "rightPropeller"],
-        scale={"leftPropeller": 250.0, "rightPropeller": -250.0},
-        offset={"leftPropeller": 250.0, "rightPropeller": -250.0},
+        scale={"leftPropeller": 125.0, "rightPropeller": -125.0},
+        offset={"leftPropeller": 125.0, "rightPropeller": -125.0},
         use_default_offset=False,
         preserve_order=True,
     )
