@@ -8,12 +8,73 @@ from __future__ import annotations
 import math
 import torch
 import isaaclab.envs.mdp as mdp
-from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
+from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction, JointVelocityAction
 from isaaclab.managers.action_manager import ActionTerm
 from isaaclab.utils import configclass
 
-# Servo position scale: policy [-1, 1] -> [-pi/2, +pi/2] rad.
-SERVO_POS_LIMIT_RAD = math.pi / 2  # 1.57 rad
+# Servo position scale: policy [-1, 1] -> [-SERVO_POS_LIMIT_RAD, +...] rad, where
+# the angle is measured OFF VERTICAL (joint 0 = propeller thrust axis at world +Z,
+# verified against doubleBee_modified.usd).
+#
+# Reduced pi/2 -> pi/6 on 2026-08-23. Why:
+#
+# The policy saturates this term. Measured on hardware (transfer_clamp.csv and
+# transfer_smooth.csv): the tied servo action sat at mean +0.979, max +1.000 for
+# essentially every live tick of both runs. It is not a transient -- it is where
+# the policy lives, because reward_progress_to_target (weight 10.0) is earned by
+# vectoring thrust forward and outbids reward_props_upright (5.0) +
+# reward_vertical_thrust_support (3.0).
+#
+# At pi/2 a saturated command is 90 deg off vertical, so cos(theta) = 0.0 and the
+# ENTIRE thrust vector goes horizontal at the propellers' 0.443 m lever arm above
+# the wheel axle. That is the torque that put the robot on its face in 0.14 s.
+#
+# Reward re-tuning was the obvious fix and is the wrong one: it only makes
+# saturation less attractive, it cannot make it safe. Shrinking the range makes
+# the saturated case itself harmless --
+#
+#     pi/2 (90 deg): cos = 0.00   full thrust horizontal
+#     pi/6 (30 deg): cos = 0.87   87% still vertical, worst case
+#
+# (The previous value also disagreed with its own comments, which claimed
+# +/-45 deg / pi/4 -- the constant had been doubled and the comments left stale.)
+#
+# RAISED pi/6 -> pi/4 later the same day. pi/6 was too tight, for a reason that
+# only became visible once the give-up behaviour was diagnosed:
+#
+# The servo angle is measured off the BODY's up axis, not the world's. So the
+# angle needed to keep thrust vertical is roughly the body's own lean. This
+# robot's median operating tilt in sim is 42 deg. At pi/6 the servo physically
+# cannot re-aim thrust to vertical once the body passes 30 deg -- which is most
+# of the time -- so any reward that asks the policy to "re-aim rather than shut
+# down" is geometrically unsatisfiable, and it will shut down instead. That is
+# precisely the failure this file is trying to remove.
+#
+#     pi/2 (90 deg): cos = 0.00  full thrust horizontal, 7.4 N*m flip torque
+#     pi/4 (45 deg): cos = 0.71  covers the 42 deg median tilt, 5.3 N*m worst case
+#     pi/6 (30 deg): cos = 0.87  safest saturated, but cannot correct normal lean
+#
+# pi/4 is the compromise: enough authority to hold thrust vertical across the
+# attitude range the robot actually lives in, while a saturated command still
+# leaves 71% of thrust vertical instead of 0%.
+#
+# DEPLOYMENT: db_inference.py must be told this number. JAIOut servo units are
+# [-1, 1] over +/-pi/2 rad, so the hardware command is
+#   servo = -(2/pi) * theta = -(2/pi) * SERVO_POS_LIMIT_RAD * action
+# i.e. a factor of 1/2 at pi/4, NOT the bare -action[2] that pi/2 implied. Pass
+# --sim_servo_limit_rad 0.7854 for checkpoints trained after this change.
+SERVO_POS_LIMIT_RAD = math.pi / 4  # 0.785 rad = 45 deg off vertical
+
+# Wheel velocity scale: policy [-1, 1] -> [-47, +47] rad/s at the joint.
+#
+# The two wheel joints are MIRRORED in the USD, so driving forward requires
+# joint velocities of opposite sign. Every wheel action term therefore carries
+# +WHEEL_VEL_LIMIT on the left and -WHEEL_VEL_LIMIT on the right. Verified
+# against hardware on 2026-08-23: sim predicts obs_0 shares the left action's
+# sign and obs_1 opposes the right action's, and the measured correlations were
+# +0.58/-0.71 (transfer_clamp), +0.13/-0.83 (transfer_auth_no_prop) and
+# +0.21/-0.38 (transfer_auth). Do NOT "simplify" this to a single sign.
+WHEEL_VEL_LIMIT_RAD_S = 47.0
 
 
 class TiedJointPositionAction(JointPositionAction):
@@ -50,6 +111,86 @@ class TiedJointPositionActionCfg(mdp.JointPositionActionCfg):
     class_type: type[ActionTerm] = TiedJointPositionAction
 
 
+class TiedJointVelocityAction(JointVelocityAction):
+    """Drive N joints from ONE action dimension (velocity version).
+
+    Same collapse as TiedJointPositionAction, for velocity-controlled joints.
+
+    NOTE THE OPPOSITE SCALE CONVENTION FROM THE SERVOS. The servos want an
+    EQUAL scale across joints, because their joint axes agree and equal scales
+    give the same physical pose. The WHEELS want a MIRRORED scale
+    (+47 / -47), because their joint axes are mirrored in the USD and opposite
+    joint velocities are what "both wheels rolling forward" means. Using an
+    equal scale here would make one action drive the robot in a permanent
+    pivot -- exactly the behaviour this term exists to remove.
+
+    This term resolves cfg.scale ITSELF rather than reusing the base class's
+    self._scale. The base class sizes that buffer with self.action_dim, which
+    this subclass overrides to 1, so a per-joint dict scale would be built
+    against the wrong width -- crashing at best, silently mis-scaling one wheel
+    at worst. TiedJointPositionAction sidesteps this only because it is given a
+    scalar. A mirrored dict is not optional here, so the scale is rebuilt below
+    against the joints' actual order.
+    """
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        self._raw_actions = torch.zeros(self.num_envs, 1, device=self.device)
+
+        names = self._resolved_joint_names()
+        n = len(names)
+        tied = torch.zeros(1, n, device=self.device)
+        if isinstance(cfg.scale, dict):
+            missing = [j for j in names if j not in cfg.scale]
+            if missing:
+                raise ValueError(
+                    "TiedJointVelocityAction: cfg.scale is a dict but has no entry "
+                    "for %s (joints resolved in order %s). Every tied joint needs "
+                    "an explicit scale -- the sign is what makes the wheels turn "
+                    "together rather than pivot." % (missing, names))
+            for k, j in enumerate(names):
+                tied[0, k] = float(cfg.scale[j])
+        else:
+            tied[:] = float(cfg.scale)
+        self._tied_scale = tied
+
+        tied_off = torch.zeros(1, n, device=self.device)
+        if getattr(cfg, "offset", None):
+            if isinstance(cfg.offset, dict):
+                for k, j in enumerate(names):
+                    tied_off[0, k] = float(cfg.offset.get(j, 0.0))
+            else:
+                tied_off[:] = float(cfg.offset)
+        self._tied_offset = tied_off
+
+    def _resolved_joint_names(self):
+        """Joint names in the order this term drives them.
+
+        IsaacLab has moved this attribute around between releases, so try the
+        known names before falling back to cfg (which is correct here only
+        because preserve_order=True is set on the cfg).
+        """
+        for attr in ("_joint_names", "joint_names"):
+            names = getattr(self, attr, None)
+            if names:
+                return list(names)
+        return list(self.cfg.joint_names)
+
+    @property
+    def action_dim(self) -> int:
+        return 1
+
+    def process_actions(self, actions: torch.Tensor):
+        self._raw_actions[:] = actions
+        # (N,1) broadcasts against (1,num_joints) -> (N,num_joints)
+        self._processed_actions = self._raw_actions * self._tied_scale + self._tied_offset
+
+
+@configclass
+class TiedJointVelocityActionCfg(mdp.JointVelocityActionCfg):
+    class_type: type[ActionTerm] = TiedJointVelocityAction
+
+
 @configclass
 class ActionsCfg:
     """Action specifications for DoubleBee robot."""
@@ -75,19 +216,20 @@ class ActionsCfg:
     )
 
     # Propeller servo position actions (for propeller tilt control)
-    # Policy output [-1, 1] → position in [-scale, scale] rad. Scale = π/4 gives ±45°.
+    # Policy output [-1, 1] -> position in [-scale, +scale] rad, measured OFF
+    # VERTICAL. See SERVO_POS_LIMIT_RAD for why that is pi/4 and not pi/2.
     # Right servo uses negative scale so both servos move in opposite directions.
     propeller_servo_pos_left = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=["leftPropellerServo"],
-        scale=SERVO_POS_LIMIT_RAD,  # ±45° (π/4 rad)
+        scale=SERVO_POS_LIMIT_RAD,  # +/-45 deg (pi/4 rad)
         use_default_offset=False,
         preserve_order=True,
     )
     propeller_servo_pos_right = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=["rightPropellerServo"],
-        scale=-SERVO_POS_LIMIT_RAD,  # ±45°, inverted for opposite direction
+        scale=-SERVO_POS_LIMIT_RAD,  # +/-45 deg, inverted for opposite direction
         use_default_offset=False,
         preserve_order=True,
     )
@@ -124,38 +266,74 @@ class ActionsCfg4D:
     This config eliminates redundant outputs by having only one action for servos
     and one for propellers. The environment will duplicate these with opposite signs.
     
-    Action mapping:
-    - [0]: left wheel velocity
-    - [1]: right wheel velocity (negative scale)
-    - [2]: servo position (duplicated to both servos with opposite signs)
-    - [3]: propeller: [-1,1] -> [0,1] -> left [0,500] rad/s, right [0,-500] rad/s -> PWM 1000-2000 -> thrust
+    Action mapping as of 2026-08-23 (4 actions, obs 36):
+    - [0]: wheel velocity, TIED -- both wheels, same ground speed, no steering
+    - [1]: servo position, TIED -- both servos, same angle off vertical
+    - [2]: left propeller velocity   0..250 rad/s
+    - [3]: right propeller velocity  0..250 rad/s (mirrored, counter-rotating)
+
+    The propellers stay independent: their differential is the only roll
+    authority left once the wheels are tied.
+
+    History: 6 actions (independent servos) -> 5 (tied servos, 2026-08-21)
+    -> 4 (tied wheels, 2026-08-23). db_inference.py auto-detects which from the
+    checkpoint's output width; see LAYOUTS there.
     """
 
-    # Wheel velocity actions (still separate for differential drive).
+    # TIED wheel action: ONE action dim drives BOTH wheels at the SAME ground
+    # speed. Added 2026-08-23 at the user's request, after four hardware runs.
+    #
     # scale 47 = ~2x the 23.6 rad/s actuator limit. Measured no-load ceiling is
     # 23.6 rad/s (db_wheels.py duty, 2026-08-20); 2x keeps the top half of the
     # action range saturated for easy exploration while the lower half stays
     # genuinely proportional. The old 500 saturated 95% of the range.
-    wheel_vel_left = mdp.JointVelocityActionCfg(
+    #
+    # NOTE THE MIRRORED SCALE, opposite to the tied SERVOS -- see
+    # TiedJointVelocityAction. The wheel joints are mirrored in the USD, so
+    # +47/-47 is what "both wheels rolling forward together" means.
+    #
+    # WHY TIE THEM. The independent version commanded a saturated counter-
+    # rotation in every hardware run, with the target dead ahead and the robot
+    # upright:
+    #   transfer_smooth.csv   a0 -0.986  a1 +0.388  ->  des_l +13.9  des_r -5.5
+    #   transfer_props.csv    a0 -0.975  a1 +0.661
+    #   transfer_auth.csv     a0 -0.815  a1 +0.418  corr(a0,a1) = -0.54
+    # Every run that drove straight did so only because db_inference.py's
+    # --max_wheel_diff clamp overrode the policy. Tying the wheels here makes
+    # that clamp unnecessary rather than load-bearing.
+    #
+    # COST, stated plainly: this removes ALL yaw authority. The robot can no
+    # longer steer, so it must be placed already pointing at the step. That is
+    # acceptable for the climb task and not for navigation. To go back, restore
+    # the two separate terms below and set --max_wheel_diff on the deploy side.
+    wheel_vel = TiedJointVelocityActionCfg(
         asset_name="robot",
-        joint_names=["leftWheel"],
-        scale=47.0,
+        joint_names=["leftWheel", "rightWheel"],
+        scale={"leftWheel": WHEEL_VEL_LIMIT_RAD_S,
+               "rightWheel": -WHEEL_VEL_LIMIT_RAD_S},
         use_default_offset=False,
         preserve_order=True,
     )
-    wheel_vel_right = mdp.JointVelocityActionCfg(
-        asset_name="robot",
-        joint_names=["rightWheel"],
-        scale=-47.0,  # Negative scale for opposite rotation
-        use_default_offset=False,
-        preserve_order=True,
-    )
+    # Pre-2026-08-23 independent wheels, kept for A/B:
+    # wheel_vel_left = mdp.JointVelocityActionCfg(
+    #     asset_name="robot", joint_names=["leftWheel"], scale=47.0,
+    #     use_default_offset=False, preserve_order=True)
+    # wheel_vel_right = mdp.JointVelocityActionCfg(
+    #     asset_name="robot", joint_names=["rightWheel"], scale=-47.0,
+    #     use_default_offset=False, preserve_order=True)
 
     # TIED servo action: ONE action dim drives BOTH servos to the SAME angle.
     # Note the scalar scale rather than the old mirrored dict -- see
     # TiedJointPositionAction. The two arms are physically symmetric, so a
     # single command is all the policy needs, and it removes the failure mode
     # where the policy poses them opposed and kills its own lift.
+    #
+    # Side benefit of the pi/4 limit: soft_joint_pos_limit_factor=0.8 against the
+    # USD's +/-90 deg servo limits clamps the sim joint at 72 deg, while the real
+    # servo travels the full 90 deg. At pi/2 the policy saturated into that gap,
+    # so sim kept cos(72)=0.31 of its thrust vertical where hardware kept
+    # cos(88)=0.03 -- sim never experienced the state the robot was actually in.
+    # At 45 deg the command never reaches the 72 deg soft limit, so the gap closes.
     propeller_servo_pos = TiedJointPositionActionCfg(
         asset_name="robot",
         joint_names=["leftPropellerServo", "rightPropellerServo"],

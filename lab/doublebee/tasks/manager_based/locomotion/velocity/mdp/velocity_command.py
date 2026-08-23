@@ -222,7 +222,30 @@ class TerrainTargetDirectionCommand(UniformVelocityCommand):
         # Monotonic heading error, normalized to [-1, 1]. Zero ONLY when facing target.
         # Unlike sin(angle_error), facing backwards (±π) now yields maximum turn signal (±1),
         # removing the stable backwards-facing equilibrium that caused circling/yaw-dancing.
-        ang_vel_z_command = angle_error / torch.pi
+        # ang_vel_z_command = angle_error / torch.pi
+        #
+        # ZEROED 2026-08-23, together with tying the wheels in ActionsCfg4D.
+        #
+        # Two independent reasons, either sufficient:
+        #
+        # 1. UNSATISFIABLE. With one tied wheel action the robot has no yaw
+        #    authority at all. A nonzero heading command is then pure noise in
+        #    the observation: the policy cannot act on it, and any reward term
+        #    keyed to it is unearnable. Worse, it is CORRELATED noise -- it grows
+        #    as the robot drifts off heading -- so the policy will happily learn
+        #    spurious couplings from it to the actions it does have (wheels,
+        #    thrust), which is how a heading error turns into a thrust command.
+        #
+        # 2. DISCONTINUOUS. angle_error/pi steps from +0.99 to -1.00 in a single
+        #    tick when the robot faces directly away from the target. Observed on
+        #    hardware as the wheel command reversing every few ticks. Removing
+        #    the backwards-facing equilibrium (the reason for the change from
+        #    sin(angle_error)) traded a stable wrong answer for an unstable one.
+        #
+        # If steering is ever restored, do NOT simply uncomment this. Use a
+        # continuous, wrapped encoding -- e.g. feed sin and cos of angle_error as
+        # two slots -- so there is no discontinuity anywhere on the circle.
+        ang_vel_z_command = torch.zeros_like(angle_error)
 
         # Set normalized direction as XY velocity command
         # Use 3D format to match original training: [lin_vel_x, lin_vel_y, ang_vel_z]
