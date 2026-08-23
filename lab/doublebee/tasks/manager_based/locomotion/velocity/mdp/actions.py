@@ -124,44 +124,68 @@ class TiedJointVelocityAction(JointVelocityAction):
     equal scale here would make one action drive the robot in a permanent
     pivot -- exactly the behaviour this term exists to remove.
 
-    This term resolves cfg.scale ITSELF rather than reusing the base class's
-    self._scale. The base class sizes that buffer with self.action_dim, which
-    this subclass overrides to 1, so a per-joint dict scale would be built
-    against the wrong width -- crashing at best, silently mis-scaling one wheel
-    at worst. TiedJointPositionAction sidesteps this only because it is given a
-    scalar. A mirrored dict is not optional here, so the scale is rebuilt below
-    against the joints' actual order.
+    THE PER-JOINT SCALE GOES IN `tied_scale`, NOT `scale`. `scale` must stay a
+    plain float. This is not stylistic -- a dict in `scale` crashes on the GPU.
+
+    IsaacLab's JointAction.__init__ resolves a dict `scale` by allocating a
+    (num_envs, action_dim) buffer and writing into it at the JOINT indices, here
+    [0, 1]. This subclass reports action_dim == 1, so the buffer is one column
+    wide and the write to column 1 trips a device-side
+    "index out of bounds" assert in IndexKernel.cu. Because CUDA reports
+    asynchronously, the traceback surfaces at whatever line syncs next rather
+    than inside the base constructor, which makes it look like a bug in this
+    file. Observed 2026-08-23 on the training box.
+
+    TiedJointPositionAction escapes this only because it is handed a scalar.
     """
 
     def __init__(self, cfg, env):
+        if isinstance(cfg.scale, dict):
+            raise ValueError(
+                "TiedJointVelocityAction: cfg.scale must be a float, not a dict -- "
+                "a dict here is resolved by the base class against action_dim=1 "
+                "and trips a CUDA index-out-of-bounds assert. Put the per-joint "
+                "signed scale in cfg.tied_scale instead and leave scale=1.0.")
         super().__init__(cfg, env)
         self._raw_actions = torch.zeros(self.num_envs, 1, device=self.device)
 
         names = self._resolved_joint_names()
         n = len(names)
         tied = torch.zeros(1, n, device=self.device)
-        if isinstance(cfg.scale, dict):
-            missing = [j for j in names if j not in cfg.scale]
+        spec = getattr(cfg, "tied_scale", None)
+        if spec is None:
+            # no per-joint spec: fall back to the scalar the base class got
+            tied[:] = float(cfg.scale)
+        elif isinstance(spec, dict):
+            missing = [j for j in names if j not in spec]
             if missing:
                 raise ValueError(
-                    "TiedJointVelocityAction: cfg.scale is a dict but has no entry "
-                    "for %s (joints resolved in order %s). Every tied joint needs "
-                    "an explicit scale -- the sign is what makes the wheels turn "
+                    "TiedJointVelocityAction: tied_scale has no entry for %s "
+                    "(joints resolved in order %s). Every tied joint needs an "
+                    "explicit scale -- the SIGN is what makes the wheels roll "
                     "together rather than pivot." % (missing, names))
             for k, j in enumerate(names):
-                tied[0, k] = float(cfg.scale[j])
+                tied[0, k] = float(spec[j]) * float(cfg.scale)
         else:
-            tied[:] = float(cfg.scale)
+            if len(spec) != n:
+                raise ValueError(
+                    "TiedJointVelocityAction: tied_scale has %d entries for %d "
+                    "joints %s." % (len(spec), n, names))
+            for k, v in enumerate(spec):
+                tied[0, k] = float(v) * float(cfg.scale)
         self._tied_scale = tied
+        # (N,num_joints), replacing the base class's (N,action_dim) buffer
+        self._processed_actions = torch.zeros(self.num_envs, n, device=self.device)
 
-        tied_off = torch.zeros(1, n, device=self.device)
-        if getattr(cfg, "offset", None):
-            if isinstance(cfg.offset, dict):
-                for k, j in enumerate(names):
-                    tied_off[0, k] = float(cfg.offset.get(j, 0.0))
-            else:
-                tied_off[:] = float(cfg.offset)
-        self._tied_offset = tied_off
+        # process_actions applies scale only. The wheels need no offset (0 rad/s
+        # is a legitimate command), so rather than carry an unused code path,
+        # refuse a configured offset outright -- silently dropping one would be a
+        # constant velocity bias that is very hard to see in a training curve.
+        off = getattr(cfg, "offset", 0.0)
+        if isinstance(off, dict) or float(off or 0.0) != 0.0:
+            raise ValueError(
+                "TiedJointVelocityAction does not apply cfg.offset (got %r). Add "
+                "offset support here before configuring one." % (off,))
 
     def _resolved_joint_names(self):
         """Joint names in the order this term drives them.
@@ -183,12 +207,20 @@ class TiedJointVelocityAction(JointVelocityAction):
     def process_actions(self, actions: torch.Tensor):
         self._raw_actions[:] = actions
         # (N,1) broadcasts against (1,num_joints) -> (N,num_joints)
-        self._processed_actions = self._raw_actions * self._tied_scale + self._tied_offset
+        torch.mul(self._raw_actions, self._tied_scale, out=self._processed_actions)
 
 
 @configclass
 class TiedJointVelocityActionCfg(mdp.JointVelocityActionCfg):
     class_type: type[ActionTerm] = TiedJointVelocityAction
+
+    tied_scale: dict[str, float] | tuple[float, ...] | None = None
+    """Per-joint signed multiplier, applied ON TOP of the scalar `scale`.
+
+    Keep `scale` a float and put the signs here -- see TiedJointVelocityAction
+    for why a dict in `scale` trips a CUDA index-out-of-bounds assert. For the
+    mirrored wheels: scale=47.0, tied_scale={"leftWheel": 1.0, "rightWheel": -1.0}.
+    """
 
 
 @configclass
@@ -306,11 +338,14 @@ class ActionsCfg4D:
     # longer steer, so it must be placed already pointing at the step. That is
     # acceptable for the climb task and not for navigation. To go back, restore
     # the two separate terms below and set --max_wheel_diff on the deploy side.
+    # NOTE: scale stays a FLOAT and the mirroring lives in tied_scale. A dict in
+    # `scale` is resolved by the base class against action_dim=1 and trips a CUDA
+    # index-out-of-bounds assert -- see TiedJointVelocityAction.
     wheel_vel = TiedJointVelocityActionCfg(
         asset_name="robot",
         joint_names=["leftWheel", "rightWheel"],
-        scale={"leftWheel": WHEEL_VEL_LIMIT_RAD_S,
-               "rightWheel": -WHEEL_VEL_LIMIT_RAD_S},
+        scale=WHEEL_VEL_LIMIT_RAD_S,
+        tied_scale={"leftWheel": 1.0, "rightWheel": -1.0},
         use_default_offset=False,
         preserve_order=True,
     )
