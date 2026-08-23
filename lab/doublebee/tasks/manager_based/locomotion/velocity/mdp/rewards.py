@@ -1003,14 +1003,89 @@ def penalize_thrust_pointing_down(env) -> torch.Tensor:
     thrust_world = quat_apply(prop_quat, thrust_local)
     z_frac_raw = thrust_world[:, :, 2].mean(dim=1)  # NOT clamped — can be negative
 
-    # props actually spinning (only penalize direction when producing thrust)
-    lpj = robot.joint_names.index("leftPropeller")
-    rpj = robot.joint_names.index("rightPropeller")
-    prop_active = torch.tanh(robot.data.joint_vel[:, [lpj, rpj]].abs().mean(dim=1) / 200.0)
-
     # penalty grows as thrust points down (z_frac negative)
     penalty_down = torch.clamp(-z_frac_raw, min=0.0)  # 0 if up/horizontal, >0 if pointing down
-    return -(penalty_down * prop_active)
+
+    # NO prop_active MULTIPLIER. This is the fix for the give-up behaviour, and
+    # it is the single most important line in this file.
+    #
+    # Until 2026-08-23 this returned -(penalty_down * prop_active), where
+    # prop_active was tanh(|prop_speed|/200). That made the penalty proportional
+    # to how hard the propellers were spinning, so the cheapest way to escape it
+    # was to STOP THE PROPELLERS. At weight 3.0 that is exactly what the policy
+    # learned, and it is fatal on hardware.
+    #
+    # Measured, transfer_clamped_props.csv 2026-08-23:
+    #     t=0.4s  lean 30 deg  thrust 18.8 N  vertical support 62%  a3 +0.93
+    #     t=0.7s  lean 50 deg  thrust  4.6 N  vertical support 16%  a3 -1.00
+    #     t=0.8s  lean 71 deg  ... a3 = a4 = -1.00, held for the next 3.8 s
+    # It threw away 62% vertical support -- the reward_vertical_thrust_support
+    # target, achieved -- at the exact moment it needed it, because past ~50 deg
+    # of lean the thrust axis passes horizontal, z_frac goes negative, and
+    # shutting down zeroed a 3.0-weighted penalty. The robot then lay on its
+    # frame with the propellers off and could not get up.
+    #
+    # Direction-only, the incentive is right: shutting down no longer escapes
+    # the penalty, and the only way to reduce it is to RE-AIM the props with the
+    # servo. That is a real, reachable action now that SERVO_POS_LIMIT_RAD is
+    # pi/4 (45 deg) rather than pi/6 -- see the note there; at 30 deg the
+    # re-aiming this asks for would have been geometrically impossible and the
+    # policy would have shut down again for lack of an alternative.
+    return -penalty_down
+
+def reward_thrust_recovery_under_lean(env, lean_onset: float = 0.15) -> torch.Tensor:
+    """Pay for VERTICAL thrust in proportion to how far the robot is leaning.
+
+    Added 2026-08-23. This is the counterpart to removing prop_active from
+    penalize_thrust_pointing_down: that stopped paying the policy to give up,
+    and this pays it to fight.
+
+    Why the existing terms leave a gap:
+
+    * reward_vertical_thrust_support is attitude-blind. It rewards the same
+      vertical thrust at 5 deg of lean as at 50, so it says nothing about the
+      case that actually matters.
+    * reward_prop_catch_when_falling gates on root_lin_vel_w[2] < 0, i.e. the
+      CoM descending. A robot tipping about its wheel axle is ROTATING, not
+      descending -- vz stays near zero for the first ~0.3 s, which is the whole
+      recovery window. Measured on hardware the term would have been ~0
+      throughout the tip. At weight 0.3 it was never going to matter anyway.
+
+    So nothing in the reward set asked the policy to push harder as it went
+    over. This does: the weight ramps with lean, so the incentive is strongest
+    exactly where the last four hardware runs died.
+
+    Args:
+        lean_onset: uprightness deficit below which this pays nothing, so
+            ordinary climbing pitch is not rewarded as if it were a recovery.
+            0.15 corresponds to roughly 32 deg of lean.
+    """
+    robot = env.scene["robot"]
+    try:
+        lp = robot.body_names.index("leftPropeller")
+        rp = robot.body_names.index("rightPropeller")
+        prop_ids = torch.tensor([lp, rp], device=robot.device)
+
+        # how far off upright: 0 when vertical, ->1 when on its side
+        uprightness = -robot.data.projected_gravity_b[:, 2]
+        lean = torch.clamp(1.0 - uprightness, min=0.0)
+        urgency = torch.clamp((lean - lean_onset) / (1.0 - lean_onset), 0.0, 1.0)
+
+        # vertical component of thrust actually being produced
+        prop_quat = robot.data.body_quat_w[:, prop_ids, :]
+        thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
+        thrust_local[:, :, 2] = 1.0
+        thrust_dir_w = quat_apply(prop_quat, thrust_local)
+
+        joint_ids = [robot.joint_names.index(n) for n in ("leftPropeller", "rightPropeller")]
+        omega = robot.data.joint_vel[:, joint_ids].abs()
+        mag = torch.clamp(omega / 250.0, 0.0, 1.0)   # matches propeller_vel action span
+        vert = (mag * torch.clamp(thrust_dir_w[:, :, 2], 0.0, 1.0)).sum(dim=1) * 0.5
+
+        return urgency * vert
+    except (ValueError, IndexError):
+        return torch.zeros(robot.num_instances, device=robot.device)
+
 
 def reward_prop_thrust_when_climbing(env) -> torch.Tensor:
     """Reward actually PRODUCING upward thrust during a climb — not just pointing props up.
@@ -1276,6 +1351,25 @@ class RewardsCfg:
         func=reward_vertical_thrust_support,
         weight=3.0,
         params={"target_frac": 0.7},
+    )
+
+    # Added 2026-08-23. Pays for vertical thrust IN PROPORTION TO LEAN, which
+    # nothing else in this set does -- see reward_thrust_recovery_under_lean for
+    # why reward_vertical_thrust_support (attitude-blind) and
+    # reward_prop_catch_when_falling (gated on vz, which stays ~0 during a tip)
+    # both leave the recovery window unrewarded.
+    #
+    # Weight 6.0 is deliberately larger than penalize_thrust_pointing_down (3.0).
+    # Past ~50 deg of lean the thrust axis passes horizontal and that penalty
+    # goes positive, so the two terms are in direct competition exactly where
+    # recovery has to happen. 6.0 vs 3.0 means fighting always beats quitting.
+    # If the policy starts hanging at high lean to farm this, lower it -- but the
+    # failure mode it is fixing (props off, robot down, 3.8 s and counting) is
+    # far worse than the one it risks.
+    reward_thrust_recovery_under_lean = RewTerm(
+        func=reward_thrust_recovery_under_lean,
+        weight=6.0,
+        params={"lean_onset": 0.15},
     )
 
     # reward_climb_transition = RewTerm(
