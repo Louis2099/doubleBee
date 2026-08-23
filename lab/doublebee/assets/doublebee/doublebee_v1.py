@@ -25,7 +25,8 @@ DOUBLEBEE_CFG = ArticulationCfg(
             roughness=0.4,  # Some roughness for better visibility
             emissive_color=(0.1, 0.05, 0.0),  # Slight glow
         ),
-        # CRITICAL FIX: Override insane USD masses (USD has BILLIONS of kg!)
+        # NOTE: the original exported USD had nonsensical masses; the
+        # doubleBee_modified.usd loaded above is the corrected one.
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             rigid_body_enabled=True,
             max_linear_velocity=1000.0,
@@ -33,7 +34,23 @@ DOUBLEBEE_CFG = ArticulationCfg(
             max_depenetration_velocity=1.0,
         ),
         mass_props=sim_utils.MassPropertiesCfg(
-            mass=None,  # Will override per-body below
+            # mass=None means DO NOT override -- the USD's own per-body masses are
+            # what sim uses. The "will override per-body below" note this replaces
+            # was stale: no per-body override exists anywhere in this file, and
+            # doubleBee_modified.usd is the version whose masses were already
+            # corrected (that is what "modified" refers to).
+            #
+            # CONFIRMED TOTAL MASS: 4.47 kg -> W = 43.9 N. Every derived number
+            # depends on this, so it is recorded here rather than in a comment
+            # somewhere downstream:
+            #   gravity torque about the wheel axle = 6.10 * sin(theta) N*m
+            #   wheels    2 x 0.35 = 0.70 N*m   -> rights  6.6 deg
+            #   props     0-375 rad/s @ pi/4    -> 8.07 N*m, rights >90 deg
+            #   T/W       0.59 at the 0-375 range, 0.83 at 0-500 (cannot hover)
+            # An earlier note put the mass at 2.76 kg, which inflated T/W from
+            # 0.38 to 0.62 and made the propeller range look adequate when it was
+            # not. See the propeller_vel term in mdp/actions.py.
+            mass=None,
         ),
     ),
 

@@ -379,20 +379,43 @@ class ActionsCfg4D:
 
     # Propeller velocity, one action per propeller (still independent -- the
     # differential is the only roll authority available).
-    #   processed = offset + scale*action, so this spans 0..250 rad/s per prop.
+    #   processed = offset + scale*action, so this spans 0..375 rad/s per prop.
     #
-    # HALVED from 250/250 (which spanned 0..500). Rationale: at 4.47 kg the
-    # airframe has T/W 0.84 at full thrust, and every hardware run so far has
-    # been flown with --prop_scale 0.3..0.6 because full authority flips the
-    # robot. Capping thrust HERE instead means the policy learns a strategy that
-    # works at the authority it will actually be given, rather than learning to
-    # rely on thrust that gets attenuated away at deploy time. Deploy with
-    # --prop_scale 1.0 to match.
+    # SIZED FROM THE RIGHTING-TORQUE REQUIREMENT, 2026-08-23. At the confirmed
+    # mass of 4.47 kg (W = 43.9 N) the gravity torque about the wheel axle is
+    # 6.10*sin(theta) N*m, and the propellers act at a 0.443 m arm, so a servo at
+    # the pi/4 limit produces T*sin(45deg)*0.443 of righting torque:
+    #
+    #   range      pwm    thrust   T/W    righting   max lean it can right
+    #   0-250     1325    16.8 N   0.38     5.27      59.8 deg
+    #   0-375     1488    25.8 N   0.59     8.07      >90  deg   <-- chosen
+    #   0-500     1650    36.6 N   0.83    11.45      >90  deg
+    #
+    # 0-250 (the value staged on 2026-08-21, when the mass was believed to be
+    # 2.76 kg) tops out at 59.8 deg -- BELOW the 70 deg termination threshold. It
+    # left a dead band from 59.8 to 70 deg where the episode kept running but
+    # recovery was physically impossible, which is the worst possible shape for
+    # this reward set: the policy is asked to recover in a region where no action
+    # can, so it learns to stop trying. That is the give-up behaviour.
+    #
+    # 0-375 covers the full pre-termination range with 1.4x margin at 70 deg,
+    # while T/W 0.59 still leaves 41% of the weight on the wheels -- the props
+    # stabilise and the wheels keep traction to drive, which is the intended
+    # division of labour. 0-500 was rejected: T/W 0.83 approaches hover and
+    # unloads the wheels (normal force -> 0), costing the traction the robot
+    # needs to translate. See reward_vertical_thrust_support for that argument.
+    #
+    # For comparison the WHEELS supply 2 x 0.35 = 0.70 N*m, which rights 6.6 deg.
+    # They are not the balance actuator on this machine and cannot be.
+    #
+    # DEPLOYMENT: db_inference.py --prop_rad_s_max 375 for checkpoints from here
+    # on (was 250). Getting it wrong is a proportional thrust error at every
+    # command. Deploy with --prop_scale 1.0 to match training authority.
     propeller_vel = mdp.JointVelocityActionCfg(
         asset_name="robot",
         joint_names=["leftPropeller", "rightPropeller"],
-        scale={"leftPropeller": 125.0, "rightPropeller": -125.0},
-        offset={"leftPropeller": 125.0, "rightPropeller": -125.0},
+        scale={"leftPropeller": 187.5, "rightPropeller": -187.5},
+        offset={"leftPropeller": 187.5, "rightPropeller": -187.5},
         use_default_offset=False,
         preserve_order=True,
     )
