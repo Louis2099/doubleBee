@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 import torch
 from isaaclab.assets import AssetBaseCfg
 from lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env_cfg import (
@@ -176,11 +177,44 @@ class DoubleBeeVelocityEnvCfg(ManagerBasedConstraintRLEnvCfg):
         # )
         # """Falling constraint - robot falling too fast."""
         
+        # RE-ENABLED 2026-08-23, with a corrected predicate and a MEASURED
+        # threshold.
+        #
+        # The old version (kept below) could never work: projected_gravity_b is a
+        # unit vector, so sum(square(...)) is identically 1.0 and the constraint
+        # was true on every step for every env. That is presumably why it got
+        # commented out, and with it went the only signal that lying down is bad.
+        # Consequence on hardware (transfer_clamped_props.csv): the robot sat on
+        # its frame at 69 deg with the propellers commanded off for 3.8 s and
+        # nothing in the episode objected.
+        #
+        # Correct predicate: uprightness = -projected_gravity_b[:, 2], which is
+        # +1 upright and 0 horizontal. Terminate below cos(threshold).
+        #
+        # THRESHOLD = 70 deg, and it is not a guess. It is where the real robot's
+        # protective support physically bottoms out, measured across every run
+        # where it sat down:
+        #     transfer_props.csv          p50 70.3  max 70.7
+        #     transfer_auth.csv           p50 69.4  max 72.1
+        #     transfer_clamped_props.csv  p50 68.4  max 69.1
+        #     combined                    p50 69.4  max 72.1  -- never past 72
+        # So 70 deg IS the hardware failure state: past it the machine is resting
+        # on its frame, not recovering. Ending the episode there stops the policy
+        # from accumulating reward in a pose the real robot cannot drive out of.
+        tilt = ConstrTerm(
+            func=lambda env: (-env.scene["robot"].data.projected_gravity_b[:, 2])
+                             < math.cos(math.radians(70.0)),
+            time_out="terminate",
+        )
+        """Terminate at 70 deg of lean -- the measured angle at which the real
+        robot's support bottoms out. See the note above; the threshold is
+        hardware-derived, not tuned."""
+
+        # BROKEN, kept as a warning -- sum(square(unit vector)) == 1.0 > 0.5 always:
         # tilt = ConstrTerm(
         #     func=lambda env: torch.sum(torch.square(env.scene["robot"].data.projected_gravity_b), dim=1) > 0.5,
-        #     time_out="terminate",  # This terminates the episode
+        #     time_out="terminate",
         # )
-        # """Excessive tilt constraint - robot tilted too much."""
 
     constraints: ConstraintsCfg = ConstraintsCfg()
 

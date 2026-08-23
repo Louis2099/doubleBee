@@ -956,7 +956,7 @@ def reward_vertical_thrust_support(env, target_frac: float = 0.7) -> torch.Tenso
         # ordering even though it is not newtons.
         joint_ids = [robot.joint_names.index(n) for n in ("leftPropeller", "rightPropeller")]
         omega = robot.data.joint_vel[:, joint_ids].abs()
-        omega_max = 250.0                                    # matches propeller_vel action span
+        omega_max = 375.0                                    # matches propeller_vel action span
         mag = torch.clamp(omega / omega_max, 0.0, 1.0)
 
         # vertical support fraction: sum over both props of mag * (thrust z-component)
@@ -1079,7 +1079,7 @@ def reward_thrust_recovery_under_lean(env, lean_onset: float = 0.15) -> torch.Te
 
         joint_ids = [robot.joint_names.index(n) for n in ("leftPropeller", "rightPropeller")]
         omega = robot.data.joint_vel[:, joint_ids].abs()
-        mag = torch.clamp(omega / 250.0, 0.0, 1.0)   # matches propeller_vel action span
+        mag = torch.clamp(omega / 375.0, 0.0, 1.0)   # matches propeller_vel action span
         vert = (mag * torch.clamp(thrust_dir_w[:, :, 2], 0.0, 1.0)).sum(dim=1) * 0.5
 
         return urgency * vert
