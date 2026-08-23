@@ -319,11 +319,47 @@ class ObservationsCfg:
             noise=Unoise(n_min=-0.1, n_max=0.1),
         )
         
-        # Angular velocity in body frame - For rotation control
+        # Angular velocity in body frame -- the RATE term of the balance loop.
+        #
+        # scale was deliberately set to 0.10 to keep projected_gravity leading on
+        # attitude. That intent is RIGHT and is preserved below: gravity still
+        # dominates in normal operation. The problem was the noise, not the goal.
+        #
+        # Measured on hardware (transfer_clamped_props.csv, obs_5:7) against the
+        # old scale=0.10 / noise=+/-0.1:
+        #
+        #     signal p50  0.020        noise std  0.058   ->  SNR 0.35
+        #     signal p90  0.093                            ->  SNR 1.6
+        #     hard tip, 3.8 rad/s -> 0.38                  ->  SNR 6.6
+        #
+        # The noise was 3x the typical signal, so for most of every episode this
+        # channel sat BELOW its own noise floor. Attenuating a signal and
+        # DELETING one are different things, and 0.10 with +/-0.1 noise did the
+        # second. An ablation on the 5-action checkpoint confirms it: zeroing
+        # this whole block moves the action by 0.0029, against 0.11 for gravity
+        # and 0.93 for the command. The policy was not using it at all.
+        #
+        # For an inverted pendulum that is fatal. Angular velocity is the only
+        # observation that reports a fall while the lean is still small enough to
+        # recover from. Without it the policy can only respond once the attitude
+        # error is already large -- exactly the hardware behaviour: no visible
+        # correction, then a tip matching passive pendulum dynamics to the sample
+        # interval (13.5 deg -> 70 deg in 0.36 s, predicted 0.36 s).
+        #
+        # Gravity was never the thing that needed help: at scale 1.15 with
+        # +/-0.05 noise its SNR is ~20, so it leads on attitude regardless.
+        #
+        # scale=0.5 keeps that ordering -- in normal operation ang_vel reads ~0.10
+        # against gravity's ~1.15, so gravity is still 10x larger -- while lifting
+        # SNR at p50 from 0.35 to ~5 so the channel carries information at all.
+        # During a fast tip it reaches ~1.9, comparable to gravity, which is the
+        # one moment the rate SHOULD lead. Nothing exceeds ~2, so no channel
+        # becomes an outlier. Noise stays nonzero: the real ang_vel comes from
+        # quaternion differencing at 100 Hz and is genuinely noisy.
         base_ang_vel = ObsTerm(
-            func=mdp.base_ang_vel, 
-            scale=0.10,  # Reduce magnitude of angular velocity
-            noise=Unoise(n_min=-0.1, n_max=0.1),
+            func=mdp.base_ang_vel,
+            scale=0.5,
+            noise=Unoise(n_min=-0.02, n_max=0.02),
         )
         
         # Projected gravity - Encodes robot orientation (roll, pitch)
