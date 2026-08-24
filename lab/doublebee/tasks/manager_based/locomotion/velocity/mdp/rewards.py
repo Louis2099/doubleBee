@@ -802,13 +802,35 @@ def reward_prop_assisted_climb(env) -> torch.Tensor:
 #     pitch = robot.data.projected_gravity_b[:, 1].abs()
 #     return -torch.clamp(pitch - max_pitch, min=0.0)
 
-def penalize_not_upright(env, upright_tol: float = 0.08) -> torch.Tensor:
+def penalize_not_upright(env, upright_tol: float = 0.002) -> torch.Tensor:
     """Penalize body tilt from upright in ANY direction (forward/back/roll).
-    Deadzone: small tilts free (climbing needs some), significant tilt penalized."""
+
+    upright_tol is a DEADZONE in units of (1 - cos(theta)): tilts below it are
+    free. Reduced 0.08 -> 0.002 on 2026-08-25, i.e. from 23.1 deg to 3.6 deg.
+
+    Why. 0.08 was chosen to leave room for climbing pitch, which was harmless
+    while the body could not rotate at all (see the USD inertia bug). Once the
+    robot could actually fall, it became the reason it could not learn not to:
+
+        passes  6.6 deg (limit of wheel authority) at t=0.27s -> penalty 0.0000
+        passes 23.1 deg (deadzone edge)            at t=0.45s -> penalty 0.0008
+        terminates at 70 deg                       at t=0.60s
+        measured mean episode length               0.56 s
+
+    The whole recoverable window sat inside the deadzone, so the first signal
+    that anything was wrong arrived with 0.11 s left, in a state no action could
+    fix. Measured consequence: 195 iterations and 5.4M timesteps with mean
+    episode length flat at 28.0 -> 28.3 steps, every reward term unchanged to
+    four decimals, and terrain_levels collapsing 0.359 -> 0.000. No gradient.
+
+    At 0.002 the gradient starts at 3.6 deg (t~0.13 s), inside the window where
+    the wheels still have authority, so early corrective action is rewarded.
+    Climbing pitch is still cheap: at 40 deg the penalty is ~1.03 against
+    reward_progress_to_target's 10.0."""
     robot = env.scene["robot"]
     uprightness = -robot.data.projected_gravity_b[:, 2]  # 1=upright, <1 tilted
     tilt = torch.clamp(1.0 - uprightness, min=0.0)
-    # deadzone: no penalty until tilt exceeds upright_tol (~allows moderate climbing pitch)
+    # deadzone: no penalty until tilt exceeds upright_tol (3.6 deg at 0.002 -- see docstring)
     return -torch.clamp(tilt - upright_tol, min=0.0)
 
 def reward_climb_transition(env) -> torch.Tensor:
