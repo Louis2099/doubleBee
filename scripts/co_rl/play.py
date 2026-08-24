@@ -678,6 +678,21 @@ def main():
             # Note: Actions are already bounded to [-1, 1] by tanh activation in actor network
             obs, _, _, extras = env.step(actions)
 
+            if timestep % 20 == 0:
+                    rb = env.unwrapped.scene["robot"]
+                    if timestep == 0:
+                        print("[BODIES]", rb.body_names, flush=True)
+                        print("[FIXED_BASE]", rb.is_fixed_base, flush=True)
+                    rq = rb.data.root_quat_w[0].cpu().numpy()
+                    rp = rb.data.root_pos_w[0].cpu().numpy()
+                    print(f"[ROOT] pos={rp} quat={rq}", flush=True)
+                    for i, n in enumerate(rb.body_names):
+                        p = rb.data.body_pos_w[0, i].cpu().numpy()
+                        q = rb.data.body_quat_w[0, i].cpu().numpy()
+                        lean = math.degrees(2*math.acos(min(1.0, abs(q[0]))))
+                        print(f"   {n:22s} z={p[2]:+.3f} quat={q} tilt={lean:6.2f}deg",
+                              flush=True)
+
             # --- attitude diagnostics: is the sim robot able to tilt at all? ---
             if timestep % 20 == 0:
                 rb = env.unwrapped.scene["robot"]
