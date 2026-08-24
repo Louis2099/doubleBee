@@ -12,6 +12,7 @@ import re
 import sys
 import time
 import numpy as np
+import math
 
 # Add project root to path for absolute imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
@@ -677,6 +678,16 @@ def main():
             # Note: Actions are already bounded to [-1, 1] by tanh activation in actor network
             obs, _, _, extras = env.step(actions)
 
+            # --- attitude diagnostics: is the sim robot able to tilt at all? ---
+            if timestep % 20 == 0:
+                rb = env.unwrapped.scene["robot"]
+                q  = rb.data.root_quat_w[0].cpu().numpy()          # (w,x,y,z)
+                pg = rb.data.projected_gravity_b[0].cpu().numpy()
+                av = rb.data.root_ang_vel_b[0].cpu().numpy()
+                lean = math.degrees(math.acos(max(-1.0, min(1.0, -pg[2]))))
+                print(f"[ATT] t={timestep} quat={q} proj_grav={pg} "
+                    f"ang_vel_b={av} lean={lean:.2f}deg", flush=True)
+                    
         # Log raw policy input (obs), output (actions), and total thrust magnitude for env 0 to CSV
         if policy_io_file is not None and policy_input.shape[0] > 0:
             o = policy_input[0].detach().cpu().numpy()
