@@ -11,6 +11,6 @@ mjcf/
 .thumbs/
 *.asset_hash
 configuration/
-*.usd
+# *.usd
 *.tex
 *.bak
