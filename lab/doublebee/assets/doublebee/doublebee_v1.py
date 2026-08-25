@@ -24,8 +24,10 @@ DOUBLEBEE_CFG = ArticulationCfg(
             roughness=0.4,  # Some roughness for better visibility
             emissive_color=(0.1, 0.05, 0.0),  # Slight glow
         ),
-        # NOTE: the original exported USD had nonsensical masses; the
-        # doubleBee_modified.usd loaded above is the corrected one.
+        # NOTE: doubleBee_merged.usd (loaded above) = the model that can rotate,
+        # plus weighed mass and measured CoM. doubleBee_modified.usd has an
+        # authored diagonalInertia in mm units that PhysX reads as kg*m^2,
+        # which makes the body rotationally immovable. Do not go back to it.
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             rigid_body_enabled=True,
             max_linear_velocity=1000.0,
@@ -39,16 +41,17 @@ DOUBLEBEE_CFG = ArticulationCfg(
             # doubleBee_modified.usd is the version whose masses were already
             # corrected (that is what "modified" refers to).
             #
-            # CONFIRMED TOTAL MASS: 4.47 kg -> W = 43.9 N. Every derived number
-            # depends on this, so it is recorded here rather than in a comment
-            # somewhere downstream:
-            #   gravity torque about the wheel axle = 6.10 * sin(theta) N*m
-            #   wheels    2 x 0.35 = 0.70 N*m   -> rights  6.6 deg
+            # CONFIRMED TOTAL MASS: 3.2182 kg -> W = 31.6 N. Weighed 2026-08-25:
+            # frame 4.700 lb + battery 2.395 lb = 7.095 lb. Every derived number
+            # depends on it, so it is recorded here rather than downstream:
+            #   gravity torque about the wheel axle = 3.21 * sin(theta) N*m
+            #   wheels    2 x 0.51 = 1.02 N*m   -> rights 18.5 deg
             #   props     0-375 rad/s @ pi/4    -> 8.07 N*m, rights >90 deg
-            #   T/W       0.59 at the 0-375 range, 0.83 at 0-500 (cannot hover)
-            # An earlier note put the mass at 2.76 kg, which inflated T/W from
-            # 0.38 to 0.62 and made the propeller range look adequate when it was
-            # not. See the propeller_vel term in mdp/actions.py.
+            #   CoM       101.6 mm above the axle (measured by balancing)
+            #   T/W       0.82 at the 0-375 range (cannot hover)
+            # This figure has been wrong twice: 2.76 kg (guess), then 4.4665 kg
+            # (authored USD masses, 28% high). 3.2182 kg is weighed. Do not
+            # revise it from a file again -- put it on a scale.
             mass=None,
         ),
     ),
@@ -75,7 +78,29 @@ DOUBLEBEE_CFG = ArticulationCfg(
         # Wheel actuators - for ground locomotion
         "wheels": DelayedPDActuatorCfg(
             joint_names_expr=["leftWheel", "rightWheel"],
-            effort_limit=0.35,  # Adjust based on your motor specs
+            # DERIVED FROM MEASUREMENT, not a datasheet guess. 0.35 was an
+            # estimate ("never validated; estimate 0.2-0.6, start 0.35") and it
+            # set the wheels' entire balance authority.
+            #
+            # db_wheels.py measured 43 rad/s^2 of wheel acceleration under the
+            # robot's own weight on 2026-08-20. At the weighed 3.2182 kg:
+            #     a   = 43 * 0.0729 m       = 3.13 m/s^2
+            #     F   = 3.2182 * 3.13       = 10.1 N
+            #     tau = 10.1 * 0.0729       = 0.73 N*m total  -> 0.37 per wheel
+            # 0.51 is kept as the LOWER bound from the heavier estimate; the
+            # lighter mass makes it, if anything, conservative.
+            #
+            # Why it matters: gravity torque about the axle is m*g*L*sin(theta)
+            # = 3.21*sin(theta) N*m at this mass, so the lean the wheels can
+            # still recover is asin(2*effort_limit / 3.21):
+            #     0.35 -> 12.6 deg      0.51 -> 18.5 deg
+            # With effort_limit 0.35 against the (then believed) 4.4665 kg the
+            # recoverable window was only 6.6 deg -- too small for exploration
+            # to find, and training stalled: 189 iterations with mean episode
+            # length flat at 27-28 steps. Some acceleration trials also had the
+            # frame support dragging, which can only have reduced the measured
+            # figure, so 0.51 is conservative in both directions.
+            effort_limit=0.51,
             velocity_limit=23.6,
             min_delay=1,
             max_delay=3,
