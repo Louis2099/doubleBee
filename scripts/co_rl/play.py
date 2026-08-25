@@ -678,6 +678,26 @@ def main():
             # Note: Actions are already bounded to [-1, 1] by tanh activation in actor network
             obs, _, _, extras = env.step(actions)
 
+            # --- propeller speed: what the action asks vs what the joint reaches ---
+            rb = env.unwrapped.scene["robot"]
+            if not hasattr(env, "_pj"):
+                env._pj = [rb.joint_names.index(n)
+                           for n in ("leftPropeller", "rightPropeller")]
+                env._pmax = 0.0
+            jv = rb.data.joint_vel[0, env._pj].abs()
+            env._pmax = max(env._pmax, float(jv.max()))
+            if timestep % 20 == 0:
+                try:
+                    tgt = env.unwrapped.action_manager.get_term(
+                        "propeller_vel").processed_actions[0].abs()
+                    tgt = tgt.max().item()
+                except Exception:
+                    tgt = float("nan")
+                print("[PROP] raw_action=%s  target=%.1f  joint_vel=%s  running_max=%.1f rad/s"
+                      % (actions[0, 2:].detach().cpu().numpy().round(3),
+                         tgt, jv.cpu().numpy().round(1), env._pmax),
+                      flush=True)
+
             if timestep % 20 == 0:
                     rb = env.unwrapped.scene["robot"]
                     if timestep == 0:
