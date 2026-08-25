@@ -185,7 +185,33 @@ DOUBLEBEE_CFG = ArticulationCfg(
         # Propeller actuators - for thrust generation
         "propellers": DelayedPDActuatorCfg(
             joint_names_expr=["leftPropeller", "rightPropeller"],
-            effort_limit=5.0,  
+            # PROPELLER TORQUE. Lowered 5.0 -> 0.2 N*m on 2026-08-25, together with
+            # authoring a physical propeller inertia in the USD (1.14e-4 kg*m^2,
+            # a 7-inch prop as a rod: m*L^2/12).
+            #
+            # The props had NO authored inertia, so PhysX computed it from the
+            # mm-scale geometry and got 0.238 kg*m^2 -- 2080x too heavy. Against
+            # the 5.0 N*m effort_limit that gave ~21 rad/s^2, i.e. 9.5 SECONDS to
+            # reach 200 rad/s. Real props get there in ~100 ms. So in sim the
+            # propellers were a flywheel the policy could not use for control,
+            # and it learned wheels-only locomotion -- measured on hardware as
+            # propeller actions averaging -0.4 and thrust below the 7.17 N
+            # static-stability threshold.
+            #
+            # 5.0 N*m was also unphysical in a second way: joint torque REACTS
+            # on the airframe, and 5.0 N*m exceeds the entire gravity torque of
+            # 3.21 N*m. Counter-rotation cancels it only while both props run
+            # together, which is precisely not the case when they are being used
+            # to control roll.
+            #
+            # 0.2 N*m over 1.14e-4 kg*m^2 = 1750 rad/s^2 -> 200 rad/s in ~114 ms,
+            # and a reaction torque small against gravity. Both physical.
+            #
+            # DEPLOYMENT: with props that now reach their commanded speed, sim's
+            # achieved omega should approach the full 375 rad/s the action asks
+            # for. Re-read `running_max` from the [PROP] print after training and
+            # set --prop_rad_s_max to it (was 200 when the props were crippled).
+            effort_limit=0.2,  
             velocity_limit=600.0,  # Increased velocity limit
             # Propellers are the BALANCE actuator and have the longest real lag
             # in the whole chain: MAVLink hop + ESC response + propeller spin-up
