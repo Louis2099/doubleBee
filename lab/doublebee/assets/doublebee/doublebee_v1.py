@@ -102,33 +102,43 @@ DOUBLEBEE_CFG = ArticulationCfg(
             # figure, so 0.51 is conservative in both directions.
             effort_limit=0.51,
             velocity_limit=23.6,
-            # WHEEL COMMAND DELAY -- measured, not assumed.
+            # WHEEL COMMAND DELAY. Kept at 1-3 steps (20-60 ms), which is the
+            # serial round trip. Do NOT raise this to model the wheels' slow
+            # reversal -- that is a SLEW limit, not a dead time, and sim already
+            # has it via effort_limit:
             #
-            # These were 1/3 steps (20-60 ms), which is roughly a serial hop.
-            # The real actuator is far slower, and it is the last known
-            # sim2real mismatch:
+            #   bench (db_wheels.py reverse, wheels off the ground):
+            #     +10 -> 0 rad/s in 173 ms = 58 rad/s^2 sustained the whole way.
+            #     173 ms x 58 = 10.0 rad/s, exactly the speed it had to shed, so
+            #     the wheel decelerates from the first instant. Dead time ~= 0.
+            #   sim: effort_limit 0.51 / (disc 4.45e-4 + armature 0.01)
+            #        = 49 rad/s^2, matching the measured 58 within 20%.
             #
-            #   bench reversal, wheels OFF the ground (db_wheels.py reverse):
-            #     +10 -> -10 rad/s crossed zero in 173 ms, reached -90% at 378 ms
-            #   under load, under policy control (hw_v8.csv):
-            #     best corr(des, meas) at 13 ticks = 260 ms
+            # I briefly set these to 10-15 on 2026-08-25, reading the 260 ms
+            # command-to-response lag from hw_v8.csv as transport delay. It is
+            # not: it is the time to slew across a full reversal, and sim
+            # reproduces it already. Stacking a transport delay on top would
+            # double-count and would very likely have made the task
+            # unlearnable. Caught because a wheel-only policy had previously
+            # balanced this robot for 10 s -- impossible with 2.5 tau of true
+            # dead time, which is what said the model had to be wrong.
+            # 2-4 steps = 40-80 ms. Raised from 1-3 on 2026-08-25.
             #
-            # It is not the controller. Quadrupling the velocity PID's P term
-            # (1.0 -> 4.0) changed the crossing time by 1 ms (173 -> 174), and
-            # the RoboClaw reports "Overcurrent M1" during the reversal, so the
-            # output is current-limited. No tuning recovers it.
+            # This is TRANSPORT delay only -- the round trip from policy output
+            # to torque at the wheel: 20 ms control period, the serial write at
+            # 38400 baud, the RoboClaw's own control loop, and the ESC/motor
+            # electrical response. 1-3 counted little more than the serial hop.
             #
-            # Why it matters: the policy catches the robot at 1-2 deg of lean
-            # and commands a reversal to stop the correction. The wheel keeps
-            # accelerating the WRONG WAY for another quarter second, peaking as
-            # the robot passes 15 deg, and drives it over. Measured repeatedly
-            # -- hw_v7 row 1825 onward, hw_v8 rows 657+. A policy trained
-            # against a 40 ms wheel cannot balance a 260 ms one.
-            #
-            # 13 steps at the 20 ms control period = 260 ms. The 10-15 range
-            # keeps the randomisation so the policy cannot latch one exact lag.
-            min_delay=10,
-            max_delay=15,
+            # Deliberately NOT larger. The wheels' slow reversal (173 ms bench,
+            # 260 ms under load) is a SLEW limit, and effort_limit already
+            # reproduces it: 0.51/(4.45e-4 + 0.01) = 49 rad/s^2 against the
+            # measured 58. Modelling that slew again as dead time would
+            # double-count it and very likely make the task unlearnable. A
+            # wheel-only policy has balanced this robot for 10 s, which is
+            # impossible with 2.5 tau of real dead time -- so the dead time is
+            # small and only the slew is large.
+            min_delay=2,
+            max_delay=4,
             stiffness={
                 "leftWheel": 0.0,   # Wheels typically have no stiffness
                 "rightWheel": 0.0,

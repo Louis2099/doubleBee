@@ -65,7 +65,25 @@ from isaaclab.utils import configclass
 # --sim_servo_limit_rad 0.7854 for checkpoints trained after this change.
 SERVO_POS_LIMIT_RAD = math.pi / 4  # 0.785 rad = 45 deg off vertical
 
-# Wheel velocity scale: policy [-1, 1] -> [-47, +47] rad/s at the joint.
+# Wheel velocity scale: policy [-1, 1] -> [-23.6, +23.6] rad/s at the joint.
+#
+# LOWERED 47 -> 23.6 on 2026-08-25. 23.6 is the measured no-load ceiling
+# (db_wheels.py duty, 2026-08-20); loaded it is ~14-15.
+#
+# At 47 the top 70% of the action range commanded speeds the wheel can never
+# reach, so saturating cost the policy nothing and it saturated constantly --
+# 22% of ticks above |0.9| on hardware, median command 28 rad/s against 7.9
+# achieved. That is the source of the bang-bang: full-scale reversals demanding
+# 94 rad/s of change, which at the measured 58 rad/s^2 takes 1.62 s to execute,
+# so the wheel is permanently chasing a command that has already flipped.
+#
+# At 23.6 a full reversal demands 47 rad/s = 0.81 s, and the useful range sits
+# in the middle of the action space where graded corrections are possible
+# instead of only slamming. No authority is lost: the wheels never reached 47.
+#
+# The old comment claimed 2x "keeps the top half saturated for easy
+# exploration". That was defensible for a robot that could not tip. It is not
+# now that balance is the task.
 #
 # The two wheel joints are MIRRORED in the USD, so driving forward requires
 # joint velocities of opposite sign. Every wheel action term therefore carries
@@ -74,7 +92,7 @@ SERVO_POS_LIMIT_RAD = math.pi / 4  # 0.785 rad = 45 deg off vertical
 # sign and obs_1 opposes the right action's, and the measured correlations were
 # +0.58/-0.71 (transfer_clamp), +0.13/-0.83 (transfer_auth_no_prop) and
 # +0.21/-0.38 (transfer_auth). Do NOT "simplify" this to a single sign.
-WHEEL_VEL_LIMIT_RAD_S = 47.0
+WHEEL_VEL_LIMIT_RAD_S = 23.6
 
 
 class TiedJointPositionAction(JointPositionAction):
@@ -315,10 +333,8 @@ class ActionsCfg4D:
     # TIED wheel action: ONE action dim drives BOTH wheels at the SAME ground
     # speed. Added 2026-08-23 at the user's request, after four hardware runs.
     #
-    # scale 47 = ~2x the 23.6 rad/s actuator limit. Measured no-load ceiling is
-    # 23.6 rad/s (db_wheels.py duty, 2026-08-20); 2x keeps the top half of the
-    # action range saturated for easy exploration while the lower half stays
-    # genuinely proportional. The old 500 saturated 95% of the range.
+    # scale 23.6 = the measured no-load ceiling, so |action| = 1 is exactly the
+    # fastest the wheel can actually turn. See WHEEL_VEL_LIMIT_RAD_S.
     #
     # NOTE THE MIRRORED SCALE, opposite to the tied SERVOS -- see
     # TiedJointVelocityAction. The wheel joints are mirrored in the USD, so
