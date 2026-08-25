@@ -678,6 +678,24 @@ def main():
             # Note: Actions are already bounded to [-1, 1] by tanh activation in actor network
             obs, _, _, extras = env.step(actions)
 
+            # --- wheel: commanded vs achieved ---
+            if not hasattr(env, "_wj"):
+                env._wj = [rb.joint_names.index(n)
+                           for n in ("leftWheel", "rightWheel")]
+                env._wprev = None
+            wv = rb.data.joint_vel[0, env._wj]
+            try:
+                wt = env.unwrapped.action_manager.get_term("wheel_vel").processed_actions[0]
+            except Exception:
+                wt = wv * float("nan")
+            acc = 0.0 if env._wprev is None else float((wv - env._wprev).abs().max()) / 0.02
+            env._wprev = wv.clone()
+            if timestep % 20 == 0:
+                print("[WHEEL] target=%s  actual=%s  |accel|=%.0f rad/s^2  track=%.2f"
+                      % (wt.cpu().numpy().round(1), wv.cpu().numpy().round(1), acc,
+                         float(wv.abs().mean() / max(float(wt.abs().mean()), 1e-6))),
+                      flush=True)
+
             # --- propeller speed: what the action asks vs what the joint reaches ---
             rb = env.unwrapped.scene["robot"]
             if not hasattr(env, "_pj"):
