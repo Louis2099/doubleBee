@@ -175,32 +175,51 @@ class DoubleBeeEventsCfg:
     #     },
     # ) # WASS 0.01
 
-    # push_robot = EventTerm(
-    #     func=push_by_setting_velocity,
-    #     mode="interval",
-    #     interval_range_s=(3.0, 6.0),   # was (8,15) — more frequent so policy sees many slow tilts
-    #     params={
-    #         "velocity_range": {
-    #             "x": (-0.05, 0.05),    # keep gentle
-    #             "y": (-0.05, 0.05),
-    #             # add a small angular component to induce actual tilt, not just translation
-    #             "roll": (-0.05, 0.05),   # gentle tilt rates → slow tilts the servo must respond to
-    #             "pitch": (-0.05, 0.05),
-    #         },
-    #     },
-    # ) # WASS 0.2
+        # push_robot roll/pitch RAISED 0.05 -> 0.25 rad/s on 2026-08-25.
+    #
+    # At 0.05 the disturbance was invisible. With tau_eff ~102 ms the lean
+    # grows as theta(t) = omega*tau*sinh(t/tau), so 0.05 rad/s reaches only
+    # ~3 deg at 0.3 s -- far inside the ~23 deg the wheels alone can recover
+    # (they deliver ~4.2 m/s^2 of contact-point acceleration, and holding a
+    # lean needs g*tan(theta)).
+    #
+    # So the wheels were never challenged, thrust was never necessary, and
+    # the policy learned WHEELS-ONLY locomotion. Confirmed in sim AND on
+    # hardware: propeller actions average about -0.4 (a third throttle) and
+    # total thrust sits below the 7.17 N static-stability threshold on most
+    # ticks. That strategy cannot work on the real robot, where the moment
+    # you let go it meets a disturbance the wheels cannot absorb.
+    #
+    # 0.25 rad/s reaches ~14 deg at 0.3 s -- past where the wheels are
+    # comfortable, short of the ~0.39 rad/s that reaches 23 deg and makes a
+    # fall unavoidable. Enough to make thrust genuinely useful without
+    # making the task unlearnable.
+    push_robot = EventTerm(
+        func=push_by_setting_velocity,
+        mode="interval",
+        interval_range_s=(3.0, 6.0),   # was (8,15) — more frequent so policy sees many slow tilts
+        params={
+            "velocity_range": {
+                "x": (-0.05, 0.05),    # keep gentle
+                "y": (-0.05, 0.05),
+                # add a small angular component to induce actual tilt, not just translation
+                "roll": (-0.25, 0.25),  # see the note above → slow tilts the servo must respond to
+                "pitch": (-0.25, 0.25),
+            },
+        },
+    )
 
-    # randomize_joint_actuator_gains = EventTerm(
-    #     func=randomize_actuator_gains,
-    #     mode="startup",  # once at start, not every reset
-    #     params={
-    #         "asset_cfg": SceneEntityCfg("robot", joint_names=["leftWheel", "rightWheel"]),
-    #         "stiffness_distribution_params": (0.8, 1.2),
-    #         "damping_distribution_params": (0.8, 1.2),
-    #         "operation": "scale",
-    #         "distribution": "log_uniform",
-    #     },
-    # )
+    randomize_joint_actuator_gains = EventTerm(
+        func=randomize_actuator_gains,
+        mode="startup",  # once at start, not every reset
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["leftWheel", "rightWheel"]),
+            "stiffness_distribution_params": (0.8, 1.2),
+            "damping_distribution_params": (0.8, 1.2),
+            "operation": "scale",
+            "distribution": "log_uniform",
+        },
+    )
 
     # randomize_servo_actuator_gains = EventTerm(
     #     func=randomize_actuator_gains,   # no mdp. prefix — imported from isaaclab.envs.mdp

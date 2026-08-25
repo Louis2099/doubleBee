@@ -1055,7 +1055,7 @@ def penalize_thrust_pointing_down(env) -> torch.Tensor:
     # policy would have shut down again for lack of an alternative.
     return -penalty_down
 
-def reward_thrust_recovery_under_lean(env, lean_onset: float = 0.15) -> torch.Tensor:
+def reward_thrust_recovery_under_lean(env, lean_onset: float = 0.05) -> torch.Tensor:
     """Pay for VERTICAL thrust in proportion to how far the robot is leaning.
 
     Added 2026-08-23. This is the counterpart to removing prop_active from
@@ -1088,10 +1088,25 @@ def reward_thrust_recovery_under_lean(env, lean_onset: float = 0.15) -> torch.Te
         rp = robot.body_names.index("rightPropeller")
         prop_ids = torch.tensor([lp, rp], device=robot.device)
 
-        # how far off upright: 0 when vertical, ->1 when on its side
-        uprightness = -robot.data.projected_gravity_b[:, 2]
-        lean = torch.clamp(1.0 - uprightness, min=0.0)
-        urgency = torch.clamp((lean - lean_onset) / (1.0 - lean_onset), 0.0, 1.0)
+        # HOW FAR OFF UPRIGHT -- measured as sin(theta), not 1-cos(theta).
+        #
+        # 1-cos is quadratic near zero, so with the old onset of 0.15 this term
+        # was EXACTLY ZERO across 5-20 deg, which is the entire band the robot
+        # operates in. It only woke up past 32 deg, by which point the wheels
+        # (good to ~23 deg) are already beyond recovering and thrust cannot
+        # catch it either. The reward meant to teach "use the props to counter
+        # lean" therefore never fired during normal operation, and the policy
+        # learned wheels-only locomotion -- confirmed in sim and on hardware,
+        # where propeller actions average about -0.4, a third throttle.
+        #
+        # sin(theta) is the horizontal component of projected gravity, and it is
+        # also exactly the term in the gravity torque m*g*L*sin(theta) that the
+        # props have to fight. So urgency now tracks the actual disturbance:
+        #     5 deg -> 0.08    15 deg -> 0.46    23 deg -> 0.76    30+ -> 1.0
+        # Saturating at 30 deg keeps the gradient concentrated in the band where
+        # thrust can still save it rather than rewarding heroics at 60 deg.
+        lean_sin = torch.linalg.norm(robot.data.projected_gravity_b[:, :2], dim=1)
+        urgency = torch.clamp((lean_sin - lean_onset) / (0.5 - lean_onset), 0.0, 1.0)
 
         # vertical component of thrust actually being produced
         prop_quat = robot.data.body_quat_w[:, prop_ids, :]
@@ -1324,9 +1339,21 @@ class RewardsCfg:
         weight=4.5, # WASS 2.5
     )
 
+    # Raised 0.1 -> 0.3 on 2026-08-25.
+    #
+    # The wheels can slew at ~58 rad/s^2 (bench) and the policy was commanding
+    # full-scale reversals: at wheel_scale 1.0 a single action step of 1.0 is
+    # 47 rad/s, i.e. 2350 rad/s^2 demanded. The measured speed then chases a
+    # command that has already flipped, which is what the 260 ms
+    # command-to-response lag in hw_v8.csv actually is -- saturation, not delay.
+    #
+    # 0.1 was too weak to bite: logged at 0.0170 against
+    # reward_progress_to_target's 0.1496, about 11%. At 0.3 it is ~34%, enough
+    # to make reversals the wheels can genuinely execute cheaper than ones they
+    # cannot. Lower it if the policy goes sluggish and stops correcting.
     penalize_action_rate = RewTerm(
         func=penalize_action_rate,
-        weight=0.1,
+        weight=0.3,
     )
     
     penalize_cross_track_error = RewTerm(
@@ -1391,7 +1418,7 @@ class RewardsCfg:
     reward_thrust_recovery_under_lean = RewTerm(
         func=reward_thrust_recovery_under_lean,
         weight=6.0,
-        params={"lean_onset": 0.15},
+        params={"lean_onset": 0.05},
     )
 
     # reward_climb_transition = RewTerm(
