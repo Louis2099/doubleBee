@@ -102,8 +102,33 @@ DOUBLEBEE_CFG = ArticulationCfg(
             # figure, so 0.51 is conservative in both directions.
             effort_limit=0.51,
             velocity_limit=23.6,
-            min_delay=1,
-            max_delay=3,
+            # WHEEL COMMAND DELAY -- measured, not assumed.
+            #
+            # These were 1/3 steps (20-60 ms), which is roughly a serial hop.
+            # The real actuator is far slower, and it is the last known
+            # sim2real mismatch:
+            #
+            #   bench reversal, wheels OFF the ground (db_wheels.py reverse):
+            #     +10 -> -10 rad/s crossed zero in 173 ms, reached -90% at 378 ms
+            #   under load, under policy control (hw_v8.csv):
+            #     best corr(des, meas) at 13 ticks = 260 ms
+            #
+            # It is not the controller. Quadrupling the velocity PID's P term
+            # (1.0 -> 4.0) changed the crossing time by 1 ms (173 -> 174), and
+            # the RoboClaw reports "Overcurrent M1" during the reversal, so the
+            # output is current-limited. No tuning recovers it.
+            #
+            # Why it matters: the policy catches the robot at 1-2 deg of lean
+            # and commands a reversal to stop the correction. The wheel keeps
+            # accelerating the WRONG WAY for another quarter second, peaking as
+            # the robot passes 15 deg, and drives it over. Measured repeatedly
+            # -- hw_v7 row 1825 onward, hw_v8 rows 657+. A policy trained
+            # against a 40 ms wheel cannot balance a 260 ms one.
+            #
+            # 13 steps at the 20 ms control period = 260 ms. The 10-15 range
+            # keeps the randomisation so the policy cannot latch one exact lag.
+            min_delay=10,
+            max_delay=15,
             stiffness={
                 "leftWheel": 0.0,   # Wheels typically have no stiffness
                 "rightWheel": 0.0,
