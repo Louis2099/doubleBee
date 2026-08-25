@@ -211,7 +211,26 @@ DOUBLEBEE_CFG = ArticulationCfg(
             # achieved omega should approach the full 375 rad/s the action asks
             # for. Re-read `running_max` from the [PROP] print after training and
             # set --prop_rad_s_max to it (was 200 when the props were crippled).
-            effort_limit=0.2,  
+            # RAISED 0.2 -> 0.6 on 2026-08-25, calibrated from measurement.
+            #
+            # With the armature fixed (0.01 -> 1e-5) the props reached 25.4 rad/s
+            # in 0.1 s at 0.2 N*m = 254 rad/s^2, i.e. 787 ms to spin up to 200.
+            # That is 13x better than before but still ~6x slower than physical,
+            # so the authored 1.14e-4 tensor is evidently not being consumed at
+            # face value somewhere in the chain. Rather than chase that, scale
+            # the torque by what was actually observed:
+            #
+            #   0.2 N*m ->  254 rad/s^2 -> 787 ms   reaction  6% of gravity torque
+            #   0.6 N*m ->  762 rad/s^2 -> 262 ms   reaction 19%
+            #   1.0 N*m -> 1270 rad/s^2 -> 157 ms   reaction 31%
+            #
+            # 0.6 puts spin-up in the same order as a real ESC and propeller
+            # while keeping the airframe reaction torque at 19% of the 3.21 N*m
+            # gravity torque -- and counter-rotation cancels most of that except
+            # when the props are driven asymmetrically for roll. 1.0 would be
+            # more faithful but puts a third of a gravity-torque into the frame
+            # exactly when the policy is using the props for control.
+            effort_limit=0.6,  
             velocity_limit=600.0,  # Increased velocity limit
             # Propellers are the BALANCE actuator and have the longest real lag
             # in the whole chain: MAVLink hop + ESC response + propeller spin-up
