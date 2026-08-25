@@ -238,9 +238,21 @@ DOUBLEBEE_CFG = ArticulationCfg(
                 "leftPropeller": 0.0,
                 "rightPropeller": 0.0,
             },
+            # ARMATURE is ADDED to the link inertia. At 0.01 it is 88x the real
+            # propeller (1.14e-4 kg*m^2 authored in the USD) and completely
+            # swamps it: measured effective inertia 0.0118, giving 16.9 rad/s^2
+            # against the 0.2 N*m effort_limit -- still seconds to spin up.
+            #
+            # Armature models rotor/gearbox inertia reflected through a
+            # reduction. These propellers are DIRECT DRIVE on the motor shaft,
+            # so the only reflected inertia is the motor rotor itself, order
+            # 1e-5 kg*m^2 for a 2306-class outrunner.
+            #
+            # With 1e-5 the total is 1.24e-4 and 0.2 N*m gives ~1600 rad/s^2,
+            # i.e. 200 rad/s in ~125 ms, which is what a real prop does.
             armature={
-                "leftPropeller": 0.01,
-                "rightPropeller": 0.01,
+                "leftPropeller": 1.0e-5,
+                "rightPropeller": 1.0e-5,
             },
         ),
     },
