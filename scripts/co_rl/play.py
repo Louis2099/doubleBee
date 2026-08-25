@@ -679,6 +679,7 @@ def main():
             obs, _, _, extras = env.step(actions)
 
             # --- wheel: commanded vs achieved ---
+            rb = env.unwrapped.scene["robot"]
             if not hasattr(env, "_wj"):
                 env._wj = [rb.joint_names.index(n)
                            for n in ("leftWheel", "rightWheel")]
@@ -692,7 +693,8 @@ def main():
             env._wprev = wv.clone()
             if timestep % 20 == 0:
                 print("[WHEEL] target=%s  actual=%s  |accel|=%.0f rad/s^2  track=%.2f"
-                      % (wt.cpu().numpy().round(1), wv.cpu().numpy().round(1), acc,
+                      % (wt.detach().cpu().numpy().round(1),
+                         wv.detach().cpu().numpy().round(1), acc,
                          float(wv.abs().mean() / max(float(wt.abs().mean()), 1e-6))),
                       flush=True)
 
