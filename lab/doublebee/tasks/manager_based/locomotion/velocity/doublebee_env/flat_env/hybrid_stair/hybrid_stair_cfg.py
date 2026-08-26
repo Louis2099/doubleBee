@@ -112,8 +112,29 @@ class DoubleBeeEventsCfg:
             "pose_range": {
                 # "roll": (0.0, 0.0),       # No roll randomization - perfectly upright
                 # "pitch": (0.0, 0.0),      # No pitch randomization - perfectly level
-                "roll": (-0.05, 0.05),    # ±3° roll noise
-                "pitch": (-0.05, 0.05),   # ±3° pitch noise
+                # +/-3 deg -> +/-20 deg, 2026-08-26. THE SERVOS HAD NOTHING TO LEARN.
+                #
+                # Resetting near 0 and then balancing under 2 deg means the
+                # policy never spends time in the 20-60 deg band, and the servo
+                # requirement there is a different problem entirely:
+                #
+                #   restoring = T*Lprop*sin(SERVO)   tipping = W*Lcom*sin(LEAN)
+                #
+                #   lean  2 deg -> servo needs  1.3 deg to break even
+                #   lean 20 deg -> servo needs 13.4 deg
+                #   lean 50 deg -> servo needs 31.0 deg
+                #
+                # At 2 deg a servo parked near zero is CORRECT and sufficient, so
+                # that is what it learned. Measured on hardware (hw_v18.csv) the
+                # robot reaches 50 deg within half a second of engaging while the
+                # servo sits near 0 -- below break-even, contributing nothing,
+                # exactly as trained.
+                #
+                # The capability is already there: at the 45 deg servo limit and
+                # 10.6 N the restoring moment beats gravity at EVERY lean up to
+                # 90 deg. The policy simply never had a reason to ask for it.
+                "roll": (-0.35, 0.35),    # +/-20 deg
+                "pitch": (-0.35, 0.35),   # +/-20 deg
                 "yaw" :(0.0, 0.0),
                 # "yaw_noise": (0.0, 0.0),  # No yaw noise - perfect alignment toward target 
                 "yaw_noise": (-0.05, 0.05), # ±6° yaw noise
