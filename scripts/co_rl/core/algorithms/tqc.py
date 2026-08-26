@@ -52,7 +52,13 @@ class TQC:
         # steps, and every reward term stayed flat to 3 significant figures.
         # 2048 puts the replay ratio at exactly 1.0 for the same 24 kernel
         # launches per iteration.
-        self.batch_size = 2048
+        # 2026-08-26: SCALES WITH num_envs. update_cnt = num_steps_per_env, so
+        # replay ratio = (update_cnt * batch) / (num_envs * num_steps_per_env)
+        # = batch / num_envs. Pinning batch to a constant means the ratio silently
+        # changes whenever --num_envs changes -- which is exactly how it ended up
+        # at 0.125 (batch 256 against 2048 envs) and cost ~4 runs. Tying them
+        # makes the ratio a property of the algorithm, not of the launch flags.
+        self.batch_size = max(2048, min(num_envs, 16384))
         self.buffer = ReplayMemory(num_envs, state_dim, action_dim, device=self.env_device, capacity=self.buffer_size)
 
         # Initialize the actor and critic networks

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os as _os
 import torch
 # from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
@@ -120,7 +121,11 @@ def terrain_levels_goal(env, env_ids, asset_cfg=SceneEntityCfg("robot")):
     terrain.terrain_levels.clamp_(min=MIN_LEVEL, max=MAX_LEVEL)
     terrain.env_origins[:] = terrain.terrain_origins[terrain.terrain_levels, terrain.terrain_types]
 
-    print(f"Terrain level histogram: {torch.bincount(terrain.terrain_levels.long())}")
+    # 2026-08-26: gated. bincount + print forces a GPU->CPU sync on EVERY reset
+    # event -- the logs showed ~10 of these per training iteration, i.e. a stall
+    # every couple of collection steps. Set DOUBLEBEE_DEBUG_TERRAIN=1 to restore.
+    if _os.environ.get("DOUBLEBEE_DEBUG_TERRAIN"):
+        print(f"Terrain level histogram: {torch.bincount(terrain.terrain_levels.long())}")
 
     return torch.mean(terrain.terrain_levels.float())
 
