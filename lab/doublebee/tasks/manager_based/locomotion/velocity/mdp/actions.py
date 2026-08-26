@@ -208,16 +208,32 @@ class TiedJointVelocityAction(JointVelocityAction):
         # Resolved exactly like tied_scale: per-joint dict in the SAME joint
         # order, or a scalar applied to every joint. Kept out of cfg.scale for
         # the same CUDA reason documented above.
-        off = getattr(cfg, "offset", 0.0)
+        # THE PER-JOINT OFFSET GOES IN `tied_offset`, NOT `offset` -- for exactly
+        # the same reason tied_scale exists. IsaacLab's JointAction.__init__
+        # resolves a dict `offset` against action_dim (which this class reports
+        # as 1) and writes at joint index 1, which is out of bounds and takes
+        # the process down with a device-side assert whose traceback points at
+        # whatever line runs next. Learned the hard way 2026-08-26.
+        raw_off = getattr(cfg, "offset", 0.0)
+        if isinstance(raw_off, dict) or float(raw_off or 0.0) != 0.0:
+            raise ValueError(
+                "TiedJointVelocityAction: put the per-joint offset in "
+                "cfg.tied_offset and leave cfg.offset at 0.0 (got %r). A dict "
+                "in cfg.offset is resolved by the base class against "
+                "action_dim=1 and crashes on the GPU." % (raw_off,))
+
+        off = getattr(cfg, "tied_offset", None)
+        if off is None:
+            off = 0.0
         if isinstance(off, dict):
             missing = [nm for nm in names if nm not in off]
             if missing:
                 raise ValueError(
-                    "TiedJointVelocityAction: offset has no entry for %s "
+                    "TiedJointVelocityAction: tied_offset has no entry for %s "
                     "(joints driven: %s)" % (missing, names))
             if len(off) != n:
                 raise ValueError(
-                    "TiedJointVelocityAction: offset has %d entries for %d "
+                    "TiedJointVelocityAction: tied_offset has %d entries for %d "
                     "joints" % (len(off), n))
             offs = torch.tensor([float(off[nm]) for nm in names],
                                 device=self.device, dtype=torch.float32)
@@ -255,6 +271,9 @@ class TiedJointVelocityActionCfg(mdp.JointVelocityActionCfg):
     class_type: type[ActionTerm] = TiedJointVelocityAction
 
     tied_scale: dict[str, float] | tuple[float, ...] | None = None
+    # Per-joint offset. MUST live here rather than in `offset`, which the base
+    # class resolves against action_dim=1 -> out-of-bounds write on the GPU.
+    tied_offset: dict[str, float] | tuple[float, ...] | None = None
     """Per-joint signed multiplier, applied ON TOP of the scalar `scale`.
 
     Keep `scale` a float and put the signs here -- see TiedJointVelocityAction
@@ -487,7 +506,7 @@ class ActionsCfg4D:
         joint_names=["leftPropeller", "rightPropeller"],
         scale=1.0,                                    # must stay a float (CUDA)
         tied_scale={"leftPropeller": 187.5, "rightPropeller": -187.5},
-        offset={"leftPropeller": 187.5, "rightPropeller": -187.5},
+        tied_offset={"leftPropeller": 187.5, "rightPropeller": -187.5},
         use_default_offset=False,
         preserve_order=True,
     )
