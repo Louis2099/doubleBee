@@ -1057,10 +1057,20 @@ def reset_propeller_spin(env, env_ids, speed_range=(80.0, 160.0)):
     except ValueError:
         return  # wheels-only task: nothing to spin
 
+    pos = robot.data.joint_pos[env_ids].clone()
     vel = robot.data.joint_vel[env_ids].clone()
     lo, hi = speed_range
     mag = torch.rand(len(env_ids), device=robot.device) * (hi - lo) + lo
     # counter-rotating, matching the action offsets (+187.5 / -187.5)
     vel[:, lpj] = mag
     vel[:, rpj] = -mag
-    robot.write_joint_velocity_to_sim(vel, env_ids=env_ids)
+
+    # clamp to the articulation's own limits, exactly as every other reset in
+    # this file does -- the propeller velocity_limit is 600 rad/s so 80-160
+    # passes through untouched, but this fails safe if that limit ever changes.
+    lim = robot.data.soft_joint_vel_limits[env_ids]
+    vel = vel.clamp_(-lim, lim)
+
+    # write_joint_state_to_sim is the call used by every other reset here.
+    # write_joint_velocity_to_sim does not exist in this IsaacLab version.
+    robot.write_joint_state_to_sim(pos, vel, env_ids=env_ids)
