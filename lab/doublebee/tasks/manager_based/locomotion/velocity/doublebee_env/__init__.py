@@ -56,7 +56,7 @@ gym.register(
         # capability check -- if TQC cannot learn wheels-only balance with this
         # observation set and actuator delay, no hybrid_stair reward tuning will
         # help, and that is a different fix.
-        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_pendulum_cfg.DoubleBeeInvertedPendulumCoRlTqcCfg,
     },
 )
 
@@ -67,7 +67,7 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": DoubleBeeInvertedPendulumCfg_PLAY,
         "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
-        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_pendulum_cfg.DoubleBeeInvertedPendulumCoRlTqcCfg,
     },
 )
 
