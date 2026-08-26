@@ -925,7 +925,31 @@ def reward_props_upright(env) -> torch.Tensor:
         from isaaclab.utils.math import quat_apply
         thrust_world = quat_apply(prop_quat, thrust_local)
         z_frac = torch.clamp(thrust_world[:, :, 2].mean(dim=1), 0.0, 1.0)
-        return z_frac ** 2   # sharpened — rewards genuinely vertical more than partial
+
+        # 2026-08-26: GATE ON ACTUAL PROP SPEED.
+        #
+        # This term carries the largest weight in the whole reward set (5.0) and
+        # until now read propeller ORIENTATION only -- it never touched joint_vel.
+        # So the policy could collect the single biggest propeller reward in the
+        # environment by pointing the props up and never spinning them, which is
+        # exactly what it did: props_upright was the largest positive term in the
+        # log (0.0430) while vertical_thrust_support sat at 0.0154 and every
+        # prop-related term drifted DOWN as alpha fell (0.85 -> 0.49).
+        #
+        # Reference speed 120 rad/s = 9.5 N total = 1.33x the 7.17 N static
+        # stability threshold (props at 0.4476 m vs CoM at 0.1016 m), and well
+        # inside the 158 rad/s the actuator can hold at damping 0.015 -- so the
+        # gate saturates somewhere the robot can actually reach and hold.
+        #
+        # 0.25 floor: keeps a direction-only gradient alive when the props are
+        # stopped, otherwise a policy with props off gets no signal about WHICH
+        # WAY to point them and can never discover the pose in the first place.
+        lpj = robot.joint_names.index("leftPropeller")
+        rpj = robot.joint_names.index("rightPropeller")
+        spin = torch.clamp(
+            robot.data.joint_vel[:, [lpj, rpj]].abs().mean(dim=1) / 120.0, 0.0, 1.0
+        )
+        return (z_frac ** 2) * (0.25 + 0.75 * spin)
     except (ValueError, IndexError):
         return torch.zeros(robot.num_instances, device=robot.device)
 
@@ -1351,9 +1375,24 @@ class RewardsCfg:
     # reward_progress_to_target's 0.1496, about 11%. At 0.3 it is ~34%, enough
     # to make reversals the wheels can genuinely execute cheaper than ones they
     # cannot. Lower it if the policy goes sluggish and stops correcting.
+    # 2026-08-26: back to 0.1. The 0.3 raise above was made for HARDWARE
+    # smoothness, and it was decided against a run whose optimizer was crippled
+    # (batch_size 256 -> replay ratio 0.125), so it never got a fair read.
+    #
+    # With the optimizer verifiably learning (critic loss 0.11 -> 0.28, alpha
+    # 0.85 -> 0.54 over 2,300 grad steps), the environment still did not move at
+    # all, and this was the single largest penalty in the log:
+    #
+    #     penalize_action_rate   -0.0261     <- taxes corrective action
+    #     penalize_not_upright   -0.0194     <- taxes falling over
+    #
+    # i.e. the policy paid more to move its actuators than to tip past 70 deg.
+    # Balancing a 102 ms pendulum at 50 Hz REQUIRES large per-step corrections.
+    # See the "lower it if the policy goes sluggish" note above -- that is the
+    # observed symptom: 89% of episodes end in tilt at 0.62 s, flat for 96 iters.
     penalize_action_rate = RewTerm(
         func=penalize_action_rate,
-        weight=0.3,
+        weight=0.1,
     )
     
     penalize_cross_track_error = RewTerm(
