@@ -195,15 +195,36 @@ class TiedJointVelocityAction(JointVelocityAction):
         # (N,num_joints), replacing the base class's (N,action_dim) buffer
         self._processed_actions = torch.zeros(self.num_envs, n, device=self.device)
 
-        # process_actions applies scale only. The wheels need no offset (0 rad/s
-        # is a legitimate command), so rather than carry an unused code path,
-        # refuse a configured offset outright -- silently dropping one would be a
-        # constant velocity bias that is very hard to see in a training curve.
+        # OFFSET SUPPORT ADDED 2026-08-26, for the tied propeller action.
+        #
+        # The wheels need no offset (0 rad/s is a legitimate command) and the
+        # original version refused one outright rather than carry a silent
+        # code path. The propellers DO need one: they must map action [-1, 1]
+        # onto [0, 375] rad/s, not [-375, +375], because negative propeller
+        # speed is not a physically different command -- the aero model takes
+        # |omega|, so a signed span would waste half the action range on a
+        # mirror of itself.
+        #
+        # Resolved exactly like tied_scale: per-joint dict in the SAME joint
+        # order, or a scalar applied to every joint. Kept out of cfg.scale for
+        # the same CUDA reason documented above.
         off = getattr(cfg, "offset", 0.0)
-        if isinstance(off, dict) or float(off or 0.0) != 0.0:
-            raise ValueError(
-                "TiedJointVelocityAction does not apply cfg.offset (got %r). Add "
-                "offset support here before configuring one." % (off,))
+        if isinstance(off, dict):
+            missing = [nm for nm in names if nm not in off]
+            if missing:
+                raise ValueError(
+                    "TiedJointVelocityAction: offset has no entry for %s "
+                    "(joints driven: %s)" % (missing, names))
+            if len(off) != n:
+                raise ValueError(
+                    "TiedJointVelocityAction: offset has %d entries for %d "
+                    "joints" % (len(off), n))
+            offs = torch.tensor([float(off[nm]) for nm in names],
+                                device=self.device, dtype=torch.float32)
+        else:
+            offs = torch.full((n,), float(off or 0.0),
+                              device=self.device, dtype=torch.float32)
+        self._tied_offset = offs.unsqueeze(0)   # (1, n), broadcasts over envs
 
     def _resolved_joint_names(self):
         """Joint names in the order this term drives them.
@@ -226,6 +247,7 @@ class TiedJointVelocityAction(JointVelocityAction):
         self._raw_actions[:] = actions
         # (N,1) broadcasts against (1,num_joints) -> (N,num_joints)
         torch.mul(self._raw_actions, self._tied_scale, out=self._processed_actions)
+        self._processed_actions.add_(self._tied_offset)
 
 
 @configclass
@@ -311,18 +333,28 @@ class ActionsCfg:
 
 @configclass
 class ActionsCfg4D:
-    """Reduced 4D action space for DoubleBee robot.
-    
+    """Reduced action space for DoubleBee robot.
+
+    NAME IS HISTORICAL -- this is now THREE actions, not four. The class name is
+    kept because it is imported in four places and a rename is churn with no
+    benefit; the mapping below is the authority, not the name.
+
     This config eliminates redundant outputs by having only one action for servos
     and one for propellers. The environment will duplicate these with opposite signs.
-    
-    Action mapping as of 2026-08-23 (4 actions, obs 36):
-    - [0]: wheel velocity, TIED -- both wheels, same ground speed, no steering
-    - [1]: servo position, TIED -- both servos, same angle off vertical
-    - [2]: left propeller velocity   0..250 rad/s
-    - [3]: right propeller velocity  0..250 rad/s (mirrored, counter-rotating)
 
-    The propellers stay independent: their differential is the only roll
+    Action mapping as of 2026-08-26 (3 actions, obs 39):
+    - [0]: wheel velocity,    TIED -- both wheels, same ground speed, no steering
+    - [1]: servo position,    TIED -- both servos, same angle off vertical
+    - [2]: propeller velocity, TIED -- both props 0..375 rad/s, counter-rotating
+
+    OBSERVATION SIZE: 39 = 2 wheel_vel + 2 servo_pos + 2 propeller_vel
+                         + 3 lin_vel + 3 ang_vel + 3 gravity + 16 height_scan
+                         + 2 contact + 3 command + 3 actions
+    db_inference.py needs a LAYOUTS[3] entry {"wheel":(0,0),"servo":(1,1),"prop":(2,2)}
+    and its obs assertion updated from 32+act_dim to 36+act_dim.
+
+    Superseded 2026-08-26 (kept for the record): the propellers used to stay
+    independent because their differential is the only roll
     authority left once the wheels are tied.
 
     History: 6 actions (independent servos) -> 5 (tied servos, 2026-08-21)
@@ -426,10 +458,35 @@ class ActionsCfg4D:
     # DEPLOYMENT: db_inference.py --prop_rad_s_max 375 for checkpoints from here
     # on (was 250). Getting it wrong is a proportional thrust error at every
     # command. Deploy with --prop_scale 1.0 to match training authority.
-    propeller_vel = mdp.JointVelocityActionCfg(
+    # TIED 2026-08-26. Was two independent dims (action space 4 -> 3).
+    #
+    # The stated reason for keeping them independent was that differential
+    # thrust is the only roll authority. Measured, that authority is barely
+    # used: the [BALANCE] probe reads roll sd 0.022 against pitch sd 0.354, 16x
+    # smaller -- two laterally separated wheel contacts make this machine
+    # statically stable in roll the way a car is. Pitch is the axis that kills
+    # it, and pitch comes from the servos, not from a thrust differential.
+    #
+    # What it buys: one less exploration dimension on a task whose measured
+    # bottleneck is discovery (episode length 30 steps == the passive fall
+    # time), and thrust that is symmetric by construction.
+    #
+    # NOTE the evidence for asymmetry being harmful -- 162.9 vs -66.4 rad/s,
+    # "sometimes only the left one fires" -- was all collected while the LEFT
+    # PROPELLER JOINT WAS GEOMETRICALLY BROKEN (a spurious 80 deg rotation,
+    # fixed in doubleBee_merged.usd the same day). The policy was treating them
+    # as different actuators because they were. This tie is a deliberate choice
+    # to constrain, not a conclusion from that data.
+    #
+    # tied_scale mirrors the sign so the pair counter-rotates, matching the old
+    # per-joint offsets. That sign is bookkeeping only: aerodynamics.py takes
+    # |omega| for thrust and applies zero reaction torque, so co- and
+    # counter-rotation are indistinguishable in sim.
+    propeller_vel = TiedJointVelocityActionCfg(
         asset_name="robot",
         joint_names=["leftPropeller", "rightPropeller"],
-        scale={"leftPropeller": 187.5, "rightPropeller": -187.5},
+        scale=1.0,                                    # must stay a float (CUDA)
+        tied_scale={"leftPropeller": 187.5, "rightPropeller": -187.5},
         offset={"leftPropeller": 187.5, "rightPropeller": -187.5},
         use_default_offset=False,
         preserve_order=True,
