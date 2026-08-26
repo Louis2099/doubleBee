@@ -262,7 +262,10 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
                 self._debug_reset_counter = 0
             self._debug_reset_counter += 1
             if self._debug_reset_counter % 10 == 0:  # Log every 10th reset
-                print(f"[DEBUG _reset_idx] Resetting {len(reset_env_ids)} envs: {reset_env_ids.tolist()}")
+                # 2026-08-26: gated -- .tolist() syncs the GPU on every reset.
+                # Set DOUBLEBEE_DEBUG_RESET=1 to restore.
+                if __import__("os").environ.get("DOUBLEBEE_DEBUG_RESET"):
+                    print(f"[DEBUG _reset_idx] Resetting {len(reset_env_ids)} envs: {reset_env_ids.tolist()}")
                 print(f"  episode_length_buf: {self.episode_length_buf[reset_env_ids].tolist()}")
                 print(f"  max_episode_length: {self.max_episode_length}")
                 print(f"  time_outs: {self.reset_time_outs[reset_env_ids].tolist()}")
