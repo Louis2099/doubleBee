@@ -833,6 +833,31 @@ def penalize_not_upright(env, upright_tol: float = 0.002) -> torch.Tensor:
     # deadzone: no penalty until tilt exceeds upright_tol (3.6 deg at 0.002 -- see docstring)
     return -torch.clamp(tilt - upright_tol, min=0.0)
 
+def reward_alive_upright(env, tol: float = 0.5) -> torch.Tensor:
+    """Constant per-step bonus while the robot is still standing.
+
+    Added 2026-08-26 for the wheels-only balance task. The hybrid reward set has
+    no survival term at all -- staying alive pays only through forfeited future
+    reward, which works ONLY while net per-step return is positive.
+
+    In the pendulum run it was not. Measured at iteration 853:
+
+        positives +0.1090   negatives -0.1838   NET -0.0748 per step
+
+    and tilt carries no terminal penalty, so ending the episode was the highest
+    return action available. The policy found it: episode length fell 66.57 ->
+    53.43 while mean reward ROSE -2.65 -> -1.20, with alpha collapsed to 0.009.
+    Shorter episodes cannot raise return unless per-step return is negative.
+
+    tol=0.5 is uprightness (-projected_gravity_b[:, 2]) = cos(60 deg), inside the
+    70 deg termination, so the bonus stops before the episode does and falling is
+    never worth more than standing.
+    """
+    robot = env.scene["robot"]
+    uprightness = -robot.data.projected_gravity_b[:, 2]
+    return (uprightness > tol).float()
+
+
 def reward_climb_transition(env) -> torch.Tensor:
     """Dense reward concentrated at the pitch-onto-step moment:
     near target + gaining height + props active + upright.
@@ -1495,3 +1520,33 @@ class RewardsCfgInvertedPendulum(RewardsCfg):
     propeller_efficiency = None
     energy_consumption = None
     propeller_on_flat_ground = None
+
+    # 2026-08-26: NAVIGATION PENALTIES OFF FOR THE BALANCE-ONLY TASK.
+    #
+    # This config inherited the full hybrid navigation reward set, so a task
+    # meant to test whether the robot can STAND was also being charged for
+    # tracking a line and holding a heading -- and charged more than it could
+    # earn. Measured at iteration 853, the four biggest costs were all
+    # navigation and none were balance:
+    #
+    #     cross_track_error       -0.0672
+    #     rotation                -0.0333
+    #     facing_mismatch         -0.0326
+    #     prolonged_no_progress   -0.0229
+    #
+    # Net per-step return was -0.0748, which makes falling over the optimal
+    # policy. Removing these three brings the balance of terms back positive.
+    penalize_cross_track_error = None
+    penalize_facing_mismatch = None
+    penalize_prolonged_no_progress = None
+
+    # Explicit survival bonus. Without it a robot that balances in place but
+    # does not travel still nets negative, because most of the remaining
+    # positive reward (progress_to_target) requires moving toward the goal.
+    # ~0.9 of steps upright x weight 0.15 = ~+0.135, against ~-0.061 of
+    # remaining penalties, so standing still is strictly profitable.
+    reward_alive_upright = RewTerm(
+        func=reward_alive_upright,
+        weight=0.15,
+        params={"tol": 0.5},
+    )
