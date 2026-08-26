@@ -254,8 +254,24 @@ DOUBLEBEE_CFG = ArticulationCfg(
                 "rightPropeller": 0.0,
             },
             damping={
-                "leftPropeller": 1000,  # MASSIVELY INCREASED (was 10.0)
-                "rightPropeller": 1000,  # τ = damping * (vel_target - vel_current)
+                # 0.0062 gives a response time constant tau = I/D = 20 ms with the
+                # corrected inertia (1.14e-4 + 1e-5 armature). Was 1000, which is
+                # meaningless for a propeller: tau would be 1.2e-7 s, far below
+                # the 5 ms physics step, so the loop overshot every step and the
+                # joint velocity had NO relationship to the command -- measured
+                # target +26.5 giving actual -167.8, target +288 giving -169.
+                #
+                # The old 2080x-too-heavy inertia hid this: the same bang-bang
+                # moved velocity only 0.1 rad/s per step instead of 202, so it
+                # looked smooth. Fixing the inertia exposed that the damping had
+                # never been tuned for a real propeller.
+                #
+                # At 0.0062 the torque at a 300 rad/s error is 1.9 N*m, well
+                # inside the 5.0 effort_limit, so the limit still sets the
+                # 200 rad/s terminal speed against drag while the loop stays
+                # stable and the policy can actually modulate thrust.
+                "leftPropeller": 0.0062,
+                "rightPropeller": 0.0062,
             },
             friction={
                 "leftPropeller": 0.0,
