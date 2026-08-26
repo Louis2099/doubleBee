@@ -266,12 +266,23 @@ DOUBLEBEE_CFG = ArticulationCfg(
                 # looked smooth. Fixing the inertia exposed that the damping had
                 # never been tuned for a real propeller.
                 #
-                # At 0.0062 the torque at a 300 rad/s error is 1.9 N*m, well
-                # inside the 5.0 effort_limit, so the limit still sets the
-                # 200 rad/s terminal speed against drag while the loop stays
-                # stable and the policy can actually modulate thrust.
-                "leftPropeller": 0.0062,
-                "rightPropeller": 0.0062,
+                # Damping also sets the TERMINAL speed, because the prop settles
+                # where D*(target - w) equals the aerodynamic drag k*w^2
+                # (k = 1.25e-4, from 5.0 N*m holding 200 rad/s at the old damping):
+                #
+                #   D        terminal w   total thrust   tau = I/D   vs 5 ms step
+                #   0.0062      114          9.2 N        20 ms         4.0x
+                #   0.015       160         11.6 N         8.3 ms       1.7x
+                #   0.025       192         13.3 N         5.0 ms       1.0x
+                #
+                # 0.0062 was tried first and capped thrust at 6.2 N, BELOW the
+                # 7.17 N static-stability threshold -- vertical_thrust_support
+                # fell from 0.0361 to 0.0115. 0.015 keeps 11.6 N (1.6x threshold)
+                # while tau stays comfortably above the physics step. 0.025 gives
+                # more thrust but puts tau exactly at the step, where the loop
+                # starts oscillating again.
+                "leftPropeller": 0.015,
+                "rightPropeller": 0.015,
             },
             friction={
                 "leftPropeller": 0.0,
