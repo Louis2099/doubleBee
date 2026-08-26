@@ -257,8 +257,9 @@ class OffPolicyRunner:
 
             # print(f"[DEBUG] buffer.size: {self.alg.buffer.size}, update_after: {self.alg.update_after}")
 
-            if self.alg.buffer.size > 50000:   # ~25 iters of fill at 2048 envs before updating
+            if self.alg.buffer.size > 50000:   # ~1 iter of fill at 2048 envs before updating
                 self.alg.update(update_cnt=self.num_steps_per_env)
+                self._grad_steps = getattr(self, "_grad_steps", 0) + self.num_steps_per_env
 
             stop = time.time()
             learn_time = stop - start
@@ -401,6 +402,18 @@ class OffPolicyRunner:
             )
             #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
             #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
+
+        # 2026-08-26: surface optimizer state. Without these there is no way to
+        # tell a policy that is learning slowly from one that is not updating at
+        # all -- which is what hid a replay ratio of 0.125 for 172 iterations.
+        if hasattr(self.alg, "last_critic_loss"):
+            log_string += (
+                f"""{'Critic loss:':>{pad}} {self.alg.last_critic_loss:.4f}\n"""
+                f"""{'Actor loss:':>{pad}} {self.alg.last_actor_loss:.4f}\n"""
+                f"""{'Alpha (entropy temp):':>{pad}} {self.alg.last_alpha:.4f}\n"""
+                f"""{'Buffer size:':>{pad}} {self.alg.buffer.size}\n"""
+                f"""{'Grad steps taken:':>{pad}} {getattr(self, '_grad_steps', 0)}\n"""
+            )
 
         log_string += ep_string
         log_string += (
