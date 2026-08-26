@@ -282,6 +282,105 @@ class TiedJointVelocityActionCfg(mdp.JointVelocityActionCfg):
     """
 
 
+
+class CommonDiffJointVelocityAction(JointVelocityAction):
+    """Drive TWO mirrored wheels from a (common, differential) pair.
+
+    Added 2026-08-26 to give the robot heading authority without going back to
+    independent left/right actions.
+
+    WHY NOT LEFT/RIGHT. The policy's balance loop lives on ONE number -- how hard
+    to drive both wheels together (measured corr(lean, wheel_action) = -0.50 in
+    sim, -0.6..-0.8 on hardware). Splitting into left/right would force it to
+    reconstruct that common mode from two coordinated outputs, and the
+    convergence it took four days to reach is built on the single-action form.
+    Here the balance loop keeps its own action untouched and steering is an
+    ORTHOGONAL second action the policy can simply leave at zero.
+
+    WHY IT IS NEEDED AT ALL. With wheels tied there is no yaw authority of any
+    kind, so lateral drift is uncorrectable -- yet penalize_cross_track_error was
+    charging -0.1576 for it, the LARGEST penalty in the set at iteration 2754.
+    An unfixable penalty does not just waste reward, it distorts the value
+    function everywhere. Either give the robot a rudder or stop the charge; this
+    is the rudder.
+
+    SIGN CONVENTION. The wheel joint axes are mirrored in the USD (leftWheel +X,
+    rightWheel -X, verified from physics:localRot0), so:
+
+        left_joint  = +common*scale + diff*diff_scale
+        right_joint = -common*scale + diff*diff_scale
+
+    Opposite joint signs = same physical direction = translation.
+    Equal joint signs    = opposite physical direction = spin in place.
+
+    diff_scale is deliberately much smaller than scale: steering is a trim, and
+    a differential large enough to fight the balance loop would be a liability.
+    """
+
+    def __init__(self, cfg, env):
+        if isinstance(cfg.scale, dict):
+            raise ValueError(
+                "CommonDiffJointVelocityAction: cfg.scale must be a float. A dict "
+                "is resolved by the base class against action_dim and writes out "
+                "of bounds on the GPU -- see TiedJointVelocityAction.")
+        off = getattr(cfg, "offset", 0.0)
+        if isinstance(off, dict) or float(off or 0.0) != 0.0:
+            raise ValueError(
+                "CommonDiffJointVelocityAction does not take an offset (got %r). "
+                "Zero wheel velocity is a legitimate command." % (off,))
+        super().__init__(cfg, env)
+        self._raw_actions = torch.zeros(self.num_envs, 2, device=self.device)
+
+        names = self._resolved_joint_names()
+        if len(names) != 2:
+            raise ValueError(
+                "CommonDiffJointVelocityAction drives exactly 2 joints, got %s"
+                % (names,))
+        self._names = names
+        # +1 / -1 on the COMMON term, mirroring the USD axes. Same order as
+        # joint_names, which preserve_order=True guarantees.
+        cm = getattr(cfg, "common_sign", None) or {names[0]: 1.0, names[1]: -1.0}
+        missing = [nm for nm in names if nm not in cm]
+        if missing:
+            raise ValueError(
+                "CommonDiffJointVelocityAction: common_sign has no entry for %s "
+                "(joints driven: %s)" % (missing, names))
+        self._common = torch.tensor([[float(cm[nm]) * float(cfg.scale)
+                                      for nm in names]], device=self.device)
+        ds = float(getattr(cfg, "diff_scale", 0.0) or 0.0)
+        self._diff = torch.full((1, 2), ds, device=self.device)
+        self._processed_actions = torch.zeros(self.num_envs, 2, device=self.device)
+
+    def _resolved_joint_names(self):
+        for attr in ("_joint_names", "joint_names"):
+            v = getattr(self, attr, None)
+            if v:
+                return list(v)
+        return list(self.cfg.joint_names)
+
+    @property
+    def action_dim(self) -> int:
+        return 2
+
+    def process_actions(self, actions: torch.Tensor):
+        self._raw_actions[:] = actions
+        # (N,1)*(1,2) broadcasts to (N,2) for each term
+        torch.mul(self._raw_actions[:, 0:1], self._common,
+                  out=self._processed_actions)
+        self._processed_actions.addcmul_(self._raw_actions[:, 1:2], self._diff)
+
+
+@configclass
+class CommonDiffJointVelocityActionCfg(mdp.JointVelocityActionCfg):
+    class_type: type[ActionTerm] = CommonDiffJointVelocityAction
+
+    # +/-1 per joint on the COMMON (translation) term. Defaults to
+    # {first: +1, second: -1}, matching the mirrored USD wheel axes.
+    common_sign: dict[str, float] | None = None
+    # rad/s that |differential action| = 1 represents. Keep well below `scale`.
+    diff_scale: float = 0.0
+
+
 @configclass
 class ActionsCfg:
     """Action specifications for DoubleBee robot."""
@@ -361,16 +460,20 @@ class ActionsCfg4D:
     This config eliminates redundant outputs by having only one action for servos
     and one for propellers. The environment will duplicate these with opposite signs.
 
-    Action mapping as of 2026-08-26 (3 actions, obs 39):
-    - [0]: wheel velocity,    TIED -- both wheels, same ground speed, no steering
-    - [1]: servo position,    TIED -- both servos, same angle off vertical
-    - [2]: propeller velocity, TIED -- both props 0..375 rad/s, counter-rotating
+    Action mapping as of 2026-08-26 (4 actions, obs 40):
+    - [0]: wheel COMMON,       both wheels together -- translation, the balance loop
+    - [1]: wheel DIFFERENTIAL, opposite directions -- yaw trim, diff_scale 8 rad/s
+    - [2]: servo position,     TIED -- both servos, same angle off vertical
+    - [3]: propeller velocity, TIED -- both props 0..375 rad/s, counter-rotating
 
-    OBSERVATION SIZE: 39 = 2 wheel_vel + 2 servo_pos + 2 propeller_vel
+    OBSERVATION SIZE: 40 = 2 wheel_vel + 2 servo_pos + 2 propeller_vel
                          + 3 lin_vel + 3 ang_vel + 3 gravity + 16 height_scan
-                         + 2 contact + 3 command + 3 actions
-    db_inference.py needs a LAYOUTS[3] entry {"wheel":(0,0),"servo":(1,1),"prop":(2,2)}
-    and its obs assertion updated from 32+act_dim to 36+act_dim.
+                         + 2 contact + 3 command + 4 actions
+
+    DEPLOYMENT. act_dim 4 now COLLIDES with the pre-2026-08-26 four-action layout
+    {"wheel":(0,0),"servo":(1,1),"prop":(2,3)}, which pairs with obs 36. The two
+    are told apart by obs_dim: 36 = legacy, 40 = this one. db_inference.py keys
+    its layout on (act_dim, obs_dim) for exactly that reason.
 
     Superseded 2026-08-26 (kept for the record): the propellers used to stay
     independent because their differential is the only roll
@@ -407,11 +510,27 @@ class ActionsCfg4D:
     # NOTE: scale stays a FLOAT and the mirroring lives in tied_scale. A dict in
     # `scale` is resolved by the base class against action_dim=1 and trips a CUDA
     # index-out-of-bounds assert -- see TiedJointVelocityAction.
-    wheel_vel = TiedJointVelocityActionCfg(
+    # (COMMON, DIFFERENTIAL) 2026-08-26. Was TIED -- one action, zero steering.
+    #
+    # [0] common       both wheels together: translation. THE BALANCE LOOP.
+    #                  Untouched from the tied version, same scale, so the
+    #                  behaviour that converged is preserved exactly.
+    # [1] differential opposite physical directions: yaw. A trim, not a drive.
+    #
+    # diff_scale 8.0 against scale 47.0 -- steering authority deliberately ~1/6
+    # of translation. A differential large enough to fight the balance loop
+    # would be a liability, and drift only needs correcting slowly.
+    #
+    # Added because with wheels tied the robot had NO yaw authority at all, so
+    # lateral drift was uncorrectable -- while penalize_cross_track_error was
+    # charging -0.1576 for it, the largest penalty in the set at iteration 2754.
+    # An unfixable penalty distorts the value function everywhere.
+    wheel_vel = CommonDiffJointVelocityActionCfg(
         asset_name="robot",
         joint_names=["leftWheel", "rightWheel"],
-        scale=WHEEL_VEL_LIMIT_RAD_S,
-        tied_scale={"leftWheel": 1.0, "rightWheel": -1.0},
+        scale=WHEEL_VEL_LIMIT_RAD_S,                    # must stay a float (CUDA)
+        common_sign={"leftWheel": 1.0, "rightWheel": -1.0},
+        diff_scale=8.0,
         use_default_offset=False,
         preserve_order=True,
     )

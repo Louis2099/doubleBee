@@ -35,7 +35,7 @@ from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.constraints impor
 #     else:
 #         dist_to_target = torch.zeros(len(env_ids), device=env.device)
 
-#     move_up = terrain._success_streak[env_ids] >= 10    # was 5 — stronger mastery bar
+#     move_up = terrain._success_streak[env_ids] >= 5    # was 5 — stronger mastery bar
 
 #     if not hasattr(terrain, "_failure_streak"):
 #         terrain._failure_streak = torch.zeros(terrain.terrain_levels.shape[0], device=env.device)
@@ -97,7 +97,16 @@ def terrain_levels_goal(env, env_ids, asset_cfg=SceneEntityCfg("robot")):
         torch.zeros_like(terrain._success_streak[env_ids]),
     )
 
-    move_up = terrain._success_streak[env_ids] >= 10
+    # 10 -> 3 on 2026-08-26. THIS IS WHY NOTHING EVER CLIMBED.
+    #
+    # Ten CONSECUTIVE successes by the SAME env, at the measured success rate
+    # of 0.186, is p^10 = 5e-8 -- roughly 20 million episodes per promotion.
+    # Meanwhile demotion fired on a SINGLE episode ending >4 m from target,
+    # which any episode that tips early always does. Promotion impossible,
+    # demotion near-certain: terrain_levels sat at 0.0000 through 2754
+    # iterations and 67M timesteps, so the policy has literally never seen a
+    # step. At 3 the expectation is ~155 episodes, which is reachable.
+    move_up = terrain._success_streak[env_ids] >= 3
 
     # failure streak uses strict goal_reached — demotes on genuine failure
     if not hasattr(terrain, "_failure_streak"):
@@ -107,7 +116,12 @@ def terrain_levels_goal(env, env_ids, asset_cfg=SceneEntityCfg("robot")):
         torch.zeros_like(terrain._failure_streak[env_ids]),
         terrain._failure_streak[env_ids] + 1,
     )
-    move_down = ((dist_to_target > 4.0) & ~reached_for_curriculum) | (terrain._failure_streak[env_ids] >= 10)
+    # DEMOTION NOW REQUIRES A STREAK TOO. The old form demoted on any single
+    # episode ending >4 m out, with no streak required, while promotion needed
+    # ten in a row. That asymmetry is what collapsed the curriculum: one early
+    # tip undid whatever progress had been made. Failure streak lowered 10 -> 5
+    # so genuine incapability still demotes, just not on one bad sample.
+    move_down = terrain._failure_streak[env_ids] >= 5
     terrain._failure_streak[env_ids] = torch.where(
         move_down,
         torch.zeros_like(terrain._failure_streak[env_ids]),
