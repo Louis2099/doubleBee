@@ -1023,3 +1023,44 @@ def reset_joints_by_offset(
     # set into the physics simulation
     asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
 
+
+def reset_propeller_spin(env, env_ids, speed_range=(80.0, 160.0)):
+    """Start each episode with the PROPELLERS ALREADY SPINNING.
+
+    Added 2026-08-26. reset_joints_by_offset uses velocity_range (0.0, 0.0), so
+    every joint -- both propellers included -- began every episode at exactly
+    zero speed.
+
+    Why that is decisive here. Measured mean episode length is 30 control steps.
+    Passive fall time for this pendulum (CoM 0.1016 m above the axle, tau =
+    102 ms) from a 0.3 deg perturbation to the 70 deg termination is 31 steps.
+    The robot is falling at the PASSIVE rate -- the policy contributes nothing.
+
+    Inside those 0.6 s, starting from dead propellers, a random policy has to
+    discover a two-part conjunction: spin the props up AND hold them world
+    vertical. Miss either and thrust does literally nothing, because the
+    restoring moment is T*L_prop*sin(theta - psi) and psi = theta gives zero.
+    That conjunction is most of why the policy keeps converging to wheels-only.
+
+    Yet the target state is trivially stable: at 11.4 N with the servos
+    tracking, T*L_prop exceeds W*L_com and the robot CANNOT fall. Starting the
+    props at 80-160 rad/s (6.4-11.5 N, straddling the 7.17 N threshold) hands
+    the policy the thrust and leaves it one thing to learn -- where to point it.
+
+    This is not sim-only cheating: db_inference.py already has --prewarm, so the
+    real robot spins its propellers before the policy is engaged.
+    """
+    robot = env.scene["robot"]
+    try:
+        lpj = robot.joint_names.index("leftPropeller")
+        rpj = robot.joint_names.index("rightPropeller")
+    except ValueError:
+        return  # wheels-only task: nothing to spin
+
+    vel = robot.data.joint_vel[env_ids].clone()
+    lo, hi = speed_range
+    mag = torch.rand(len(env_ids), device=robot.device) * (hi - lo) + lo
+    # counter-rotating, matching the action offsets (+187.5 / -187.5)
+    vel[:, lpj] = mag
+    vel[:, rpj] = -mag
+    robot.write_joint_velocity_to_sim(vel, env_ids=env_ids)

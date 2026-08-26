@@ -314,6 +314,20 @@ class DoubleBeeEventsCfg_PLAY:
         },
     )
 
+    # 2026-08-26: PROPELLERS START SPUN UP. Must run AFTER reset_robot_joints,
+    # which zeroes every joint velocity. See mdp.events.reset_propeller_spin --
+    # the short version is that measured episode length (30 steps) equals the
+    # PASSIVE fall time (31 steps), so the policy is doing nothing, and from
+    # dead props it has 0.6 s to discover "spin up AND point vertical" as a
+    # conjunction. 80-160 rad/s = 6.4-11.5 N, straddling the 7.17 N static
+    # stability threshold, so some episodes start already stable and some do
+    # not -- which is the gradient we want.
+    reset_propeller_spin = EventTerm(
+        func=mdp.reset_propeller_spin,
+        mode="reset",
+        params={"speed_range": (80.0, 160.0)},
+    )
+
 
 @configclass
 class DoubleBeeHybridStairCfg(DoubleBeeVelocityEnvCfg):
