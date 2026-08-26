@@ -191,7 +191,7 @@ def reward_climb_progress(env) -> torch.Tensor:
 
             lean = robot.data.projected_gravity_b[:, 1]   # fwd/back (sim forward = +Y)
             roll = robot.data.projected_gravity_b[:, 0]
-            rate = robot.data.base_ang_vel_b[:, 0]        # pitch rate about the axle
+            rate = robot.data.root_ang_vel_b[:, 0]        # pitch rate about the axle
             act = env.action_manager.action
             wcmd = act[:, 0]                              # tied wheel action (index 0 in both cfgs)
             wj = robot.joint_names.index("leftWheel")
@@ -208,8 +208,15 @@ def reward_climb_progress(env) -> torch.Tensor:
                    wvel.mean().item(), wvel.std().item()),
                 flush=True,
             )
-    except (ValueError, IndexError, KeyError, AttributeError, RuntimeError):
-        pass
+    except Exception as _e:
+        # NEVER swallow this one silently -- a bare `except: pass` is why the
+        # first version of this probe printed nothing at all and looked like it
+        # had not been synced.
+        if not hasattr(env, "_bal_err"):
+            env._bal_err = 0
+        env._bal_err += 1
+        if env._bal_err <= 3:
+            print("[BALANCE] PROBE FAILED: %s: %s" % (type(_e).__name__, _e), flush=True)
     # ---- END BALANCE PROBE ----------------------------------------------
 
     # reward: going UP while AT a step. Technique-agnostic.
