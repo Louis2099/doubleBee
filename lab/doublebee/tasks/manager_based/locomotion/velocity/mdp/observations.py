@@ -294,19 +294,39 @@ class ObservationsCfg:
             noise=Unoise(n_min=-1.5, n_max=1.5),
         )
         
-        # # Servo positions - Critical for propeller orientation control
-        # servo_pos = ObsTerm(
-        #     func=servo_positions,
-        #     # No scaling needed, positions are already in [-1.57, 1.57] (±90°)
-        #     noise=Unoise(n_min=-0.05, n_max=0.05),
-        # )
-        
-        # # Propeller velocities - For thrust generation feedback
-        # propeller_vel = ObsTerm(
-        #     func=propeller_velocities,
-        #     scale=0.01,  # Scale down high propeller speeds (typ. 0-600 rad/s)
-        #     noise=Unoise(n_min=-1.5, n_max=1.5),
-        # )
+        # RE-ENABLED 2026-08-26. Both were commented out, so the policy commanded
+        # servo angle and propeller speed while observing NEITHER.
+        #
+        # Why that is fatal for this machine specifically: the propellers' whole
+        # contribution to balance is T*L_prop*sin(theta - psi), where psi is the
+        # thrust axis angle off world-vertical. At psi = theta (props body-fixed)
+        # the restoring moment is exactly ZERO -- thrust does nothing at all. So
+        # psi is not a detail, it is the difference between the props helping and
+        # the props being dead weight, and the policy could not see it.
+        #
+        # It could not infer it either: this TQC actor is feedforward
+        # (is_recurrent = False), so its only memory is `actions` -- ONE step of
+        # command history. The servo carries 40-100 ms of delay (min_delay 2,
+        # max_delay 5) and a 2.0 rad/s slew limit, so the achieved angle lags the
+        # command by 2-5 steps. A memoryless policy cannot integrate that.
+        #
+        # Cost: obs 36 -> 40. The deployment script MUST be updated to match --
+        # see the layout note in the class docstring below.
+        servo_pos = ObsTerm(
+            func=servo_positions,
+            # Already in [-0.785, 0.785] (+/-45 deg, SERVO_POS_LIMIT_RAD), which
+            # is the same order as gravity's 1.15 -- no scaling needed.
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+        )
+
+        # Propeller speed. Terminal is ~158 rad/s at damping 0.015, so scale 0.01
+        # puts this channel at 0-1.58, comparable to the other inputs. The 0-600
+        # assumption in the original comment predates the actuator fixes.
+        propeller_vel = ObsTerm(
+            func=propeller_velocities,
+            scale=0.01,
+            noise=Unoise(n_min=-1.5, n_max=1.5),
+        )
 
         # ========================================
         # 2. Base State (Robot body motion)
