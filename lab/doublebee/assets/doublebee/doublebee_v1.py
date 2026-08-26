@@ -211,26 +211,30 @@ DOUBLEBEE_CFG = ArticulationCfg(
             # achieved omega should approach the full 375 rad/s the action asks
             # for. Re-read `running_max` from the [PROP] print after training and
             # set --prop_rad_s_max to it (was 200 when the props were crippled).
-            # RAISED 0.2 -> 0.6 on 2026-08-25, calibrated from measurement.
+            # RESTORED to 5.0 N*m. Lowering it to 0.2 then 0.6 on 2026-08-25 was
+            # a mistake and cost a 520-iteration run.
             #
-            # With the armature fixed (0.01 -> 1e-5) the props reached 25.4 rad/s
-            # in 0.1 s at 0.2 N*m = 254 rad/s^2, i.e. 787 ms to spin up to 200.
-            # That is 13x better than before but still ~6x slower than physical,
-            # so the authored 1.14e-4 tensor is evidently not being consumed at
-            # face value somewhere in the chain. Rather than chase that, scale
-            # the torque by what was actually observed:
+            # effort_limit is NOT just spin-up torque -- aerodynamic drag on the
+            # propeller grows as omega^2, so the steady-state torque is what sets
+            # the TOP SPEED, and therefore the thrust ceiling:
             #
-            #   0.2 N*m ->  254 rad/s^2 -> 787 ms   reaction  6% of gravity torque
-            #   0.6 N*m ->  762 rad/s^2 -> 262 ms   reaction 19%
-            #   1.0 N*m -> 1270 rad/s^2 -> 157 ms   reaction 31%
+            #   0.2 N*m -> terminal  40 rad/s ->  6.0 N total
+            #   0.6 N*m -> terminal  69 rad/s ->  7.2 N total
+            #   5.0 N*m -> terminal 200 rad/s -> 13.8 N total
             #
-            # 0.6 puts spin-up in the same order as a real ESC and propeller
-            # while keeping the airframe reaction torque at 19% of the 3.21 N*m
-            # gravity torque -- and counter-rotation cancels most of that except
-            # when the props are driven asymmetrically for roll. 1.0 would be
-            # more faithful but puts a third of a gravity-torque into the frame
-            # exactly when the policy is using the props for control.
-            effort_limit=0.6,  
+            # The static-stability threshold is 7.17 N (m*g*L/arm at 3.2182 kg,
+            # CoM 101.6 mm, prop arm 447.6 mm). At 0.6 the props physically could
+            # not reach it, so no reward could ever teach the policy to balance
+            # with them. Measured at iteration 520: joint_vel pinned at 44 rad/s
+            # against a target of 339, thrust 3.1 N/prop, terrain_levels collapsed
+            # to 0, episode length back down to 33.
+            #
+            # The slow spin-up that motivated lowering this was never the torque
+            # -- it was the inertia: no authored tensor (auto-computed 0.238
+            # kg*m^2, 2080x too heavy) plus an armature of 0.01 (88x the real
+            # propeller). Both are fixed now, so 5.0 N*m gives both a fast
+            # spin-up and the full 200 rad/s ceiling.
+            effort_limit=5.0,  
             velocity_limit=600.0,  # Increased velocity limit
             # Propellers are the BALANCE actuator and have the longest real lag
             # in the whole chain: MAVLink hop + ESC response + propeller spin-up
