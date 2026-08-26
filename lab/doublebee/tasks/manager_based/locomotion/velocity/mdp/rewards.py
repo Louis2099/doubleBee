@@ -1557,6 +1557,27 @@ class RewardsCfg:
         weight=0.3,
     )
 
+    # 2026-08-26: SURVIVAL BONUS ON THE MAIN TASK TOO.
+    #
+    # There was no term anywhere that paid simply for still being upright.
+    # Staying alive paid only through forfeited future reward, which is an
+    # indirect and weak gradient -- and it competes with reward_progress_to_target
+    # (weight 10.0, the largest in the set), which is earned by DRIVING FORWARD,
+    # the one thing guaranteed to topple an inverted pendulum. A random policy
+    # can collect progress in 0.6 s; it cannot collect balance in 0.6 s. So
+    # gradient descent takes the reachable one.
+    #
+    # Weight 2.0 against progress_to_target's 10.0: at ~0.9 of steps upright
+    # this pays ~1.8/step, which is comparable to what a short forward dash
+    # earns, so surviving is no longer strictly dominated. Deliberately NOT
+    # larger -- overpaying survival produces a robot that stands still, and
+    # penalize_prolonged_no_progress is only weight 0.5.
+    reward_alive_upright = RewTerm(
+        func=reward_alive_upright,
+        weight=2.0,
+        params={"tol": 0.5},
+    )
+
 @configclass
 class RewardsCfgInvertedPendulum(RewardsCfg):
     """Reward config for inverted-pendulum (wheels-only, same-level target).
