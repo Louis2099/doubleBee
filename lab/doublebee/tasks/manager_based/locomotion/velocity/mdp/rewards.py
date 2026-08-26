@@ -168,6 +168,50 @@ def reward_climb_progress(env) -> torch.Tensor:
         pass
     # ---- END TEMP ----
 
+    # ---- TEMP 2026-08-26: BALANCE PROBE ----------------------------------
+    # Does the wheel command respond to lean AT ALL? Everything else has been
+    # eliminated (optimizer, propeller actuator, reward sign, reward shaping,
+    # wheel wiring, body inertia, and actuator dead time -- p*theta 0.79 -> 0.00
+    # changed nothing). If the policy is not using its own attitude observation,
+    # no reward or plant change can matter.
+    #
+    # Correlations are taken ACROSS ENVS at one step, which is the right axis
+    # here: 1024 robots at 1024 different lean angles, each choosing a wheel
+    # command. A balancing policy MUST show a strong lean->command relationship.
+    try:
+        if not hasattr(env, "_bal_dbg"):
+            env._bal_dbg = 0
+        env._bal_dbg += 1
+        if env._bal_dbg % 50 == 0:
+            def _corr(a, b):
+                a = a.float(); b = b.float()
+                a = a - a.mean(); b = b - b.mean()
+                d = a.norm() * b.norm()
+                return (a @ b / d).item() if d > 1e-8 else float("nan")
+
+            lean = robot.data.projected_gravity_b[:, 1]   # fwd/back (sim forward = +Y)
+            roll = robot.data.projected_gravity_b[:, 0]
+            rate = robot.data.base_ang_vel_b[:, 0]        # pitch rate about the axle
+            act = env.action_manager.action
+            wcmd = act[:, 0]                              # tied wheel action (index 0 in both cfgs)
+            wj = robot.joint_names.index("leftWheel")
+            wvel = robot.data.joint_vel[:, wj]
+
+            print(
+                "[BALANCE] corr(lean,wcmd)=%+.3f corr(rate,wcmd)=%+.3f "
+                "corr(lean,wvel)=%+.3f corr(wcmd,wvel)=%+.3f | "
+                "lean sd=%.3f roll sd=%.3f wcmd mean=%+.3f sd=%.3f "
+                "wvel mean=%+.1f sd=%.1f"
+                % (_corr(lean, wcmd), _corr(rate, wcmd), _corr(lean, wvel),
+                   _corr(wcmd, wvel), lean.std().item(), roll.std().item(),
+                   wcmd.mean().item(), wcmd.std().item(),
+                   wvel.mean().item(), wvel.std().item()),
+                flush=True,
+            )
+    except (ValueError, IndexError, KeyError, AttributeError, RuntimeError):
+        pass
+    # ---- END BALANCE PROBE ----------------------------------------------
+
     # reward: going UP while AT a step. Technique-agnostic.
     return rising * step_ahead
 
