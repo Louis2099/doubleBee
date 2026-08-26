@@ -145,7 +145,35 @@ class DoubleBeeInvertedPendulumCfg(DoubleBeeHybridStairCfg):
         self.decimation = 4
         self.sim.dt = 0.005
 
+        # DIAGNOSTIC 2026-08-26: WHEEL DEAD TIME -> 0, task-local so run A is untouched.
+        #
+        # With the reward sign fixed (survival strictly profitable, net +0.05)
+        # this task still could not stay up past ~1 s after 5,472 gradient steps
+        # on a problem with a known-good hardware precedent. That rules out
+        # reward shaping and points at the plant.
+        #
+        # CoM sits 0.1016 m above the axle -> tau = 102 ms, unstable pole
+        # p = 9.83 rad/s. Stabilizing an unstable pole p through dead time theta
+        # needs p*theta < 1 to be possible at all and p*theta < 0.3 to be usable:
+        #
+        #     min_delay=2  ->  40 ms  ->  p*theta = 0.39
+        #     mean         ->  60 ms  ->  p*theta = 0.59
+        #     max_delay=4  ->  80 ms  ->  p*theta = 0.79
+        #
+        # and the policy has to cope with the worst case in the randomized range.
+        # Every setting is past the usable limit.
+        #
+        # This is a DIAGNOSTIC, not a deployment config -- the real robot has
+        # real dead time. If balance appears at 0 and not at 2-4, the delay is
+        # the wall, and the answer is not "train harder": propellers held
+        # world-vertical remove the unstable pole entirely (they turn the
+        # diverging pendulum into a 0.8-1.4 s oscillator), which would make
+        # prop-assist mandatory rather than optional.
+        self.scene.robot.actuators["wheels"].min_delay = 0
+        self.scene.robot.actuators["wheels"].max_delay = 0
+
         print("[INFO] Using DoubleBee inverted-pendulum config: same-level target, no height scan, wheels only.")
+        print("[INFO] DIAGNOSTIC: wheel actuator delay forced to 0 (was 2-4 steps / 40-80 ms).")
 
 
 @configclass
