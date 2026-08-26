@@ -45,7 +45,14 @@ class TQC:
 
         # Replay memory
         self.buffer_size = 1000000
-        self.batch_size = 256
+        # 2026-08-26: was 256. With 2048 envs x 24 steps = 49,152 transitions
+        # collected per iteration, batch 256 x 24 grad steps trained on only
+        # 6,144 of them -- replay ratio 0.125, vs 1.0-4.0 for standard
+        # off-policy RL. 172 iterations = 8.45M env steps but only ~4,080 Adam
+        # steps, and every reward term stayed flat to 3 significant figures.
+        # 2048 puts the replay ratio at exactly 1.0 for the same 24 kernel
+        # launches per iteration.
+        self.batch_size = 2048
         self.buffer = ReplayMemory(num_envs, state_dim, action_dim, device=self.env_device, capacity=self.buffer_size)
 
         # Initialize the actor and critic networks
@@ -78,6 +85,8 @@ class TQC:
         return
 
     def update(self, update_cnt):
+        _c_sum = 0.0
+        _a_sum = 0.0
         for _ in range(update_cnt):
             # Sample a batch of transitions
             states, actions, rewards, next_states, dones = self.buffer.sample(self.batch_size)
@@ -113,7 +122,13 @@ class TQC:
             self.alpha_optimizer.step()
 
             soft_update(self.critic, self.target_critic, self.tau)
+            _c_sum += critic_loss.item()
+            _a_sum += actor_loss.item()
 
-        return
+        n = max(update_cnt, 1)
+        self.last_critic_loss = _c_sum / n
+        self.last_actor_loss = _a_sum / n
+        self.last_alpha = self.log_alpha.exp().item()
+        return self.last_critic_loss, self.last_actor_loss, self.last_alpha
 
 
