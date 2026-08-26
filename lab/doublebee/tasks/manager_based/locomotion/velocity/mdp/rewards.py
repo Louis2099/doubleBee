@@ -181,13 +181,47 @@ def reward_climb_progress(env) -> torch.Tensor:
     try:
         if not hasattr(env, "_bal_dbg"):
             env._bal_dbg = 0
+            env._sact_prev = None
+            env._sact_ac_sum = 0.0
+            env._sact_ac_n = 0
         env._bal_dbg += 1
+
+        # TEMPORAL lag-1 autocorrelation of the servo action, accumulated EVERY
+        # tick. A value near -1 means the policy alternates its servo command
+        # every step -- the failure mode measured on hardware (hw_v17.csv,
+        # corr(servo_pos, servo_act) = -1.000).
+        _sa = env.action_manager.action[:, 1]
+        if env._sact_prev is not None:
+            _a = _sa - _sa.mean()
+            _b = env._sact_prev - env._sact_prev.mean()
+            _d = _a.norm() * _b.norm()
+            if _d > 1e-8:
+                env._sact_ac_sum += float((_a @ _b / _d).item())
+                env._sact_ac_n += 1
+        env._sact_prev = _sa.clone()
+
         if env._bal_dbg % 50 == 0:
             def _corr(a, b):
                 a = a.float(); b = b.float()
                 a = a - a.mean(); b = b - b.mean()
                 d = a.norm() * b.norm()
                 return (a @ b / d).item() if d > 1e-8 else float("nan")
+
+            # SERVO CHANNEL added 2026-08-26. Deployment has now guessed three
+            # times at how to reconstruct servo_pos for hardware (pure delay ->
+            # 4.2 Hz limit cycle; raw command -> corr(pos,act) = -1.000 exactly,
+            # a one-tick flip-flop; first-order lag -> untested). These three
+            # numbers are the ground truth those guesses should be matched to:
+            #   corr(servo_pos, servo_act)  is the loop gain the policy applies
+            #   corr(lean,      servo_act)  is whether it aims at the fall AT ALL
+            #   ac1                         is whether SIM's own servo alternates
+            sj_l = robot.joint_names.index("leftPropellerServo")
+            svp = robot.data.joint_pos[:, sj_l]
+            sva = env.action_manager.action[:, 1]
+            # lag-1 correlation must be TEMPORAL (this tick vs last tick), not
+            # across envs -- env i against env i+1 measures nothing. Accumulated
+            # every tick below and averaged over the 50-tick print interval.
+            ac1 = env._sact_ac_sum / max(env._sact_ac_n, 1)
 
             lean = robot.data.projected_gravity_b[:, 1]   # fwd/back (sim forward = +Y)
             roll = robot.data.projected_gravity_b[:, 0]
@@ -197,6 +231,16 @@ def reward_climb_progress(env) -> torch.Tensor:
             wj = robot.joint_names.index("leftWheel")
             wvel = robot.data.joint_vel[:, wj]
 
+            print(
+                "[SERVOLOOP] corr(spos,sact)=%+.3f corr(lean,sact)=%+.3f "
+                "lag1_ac=%+.3f | spos mean=%+.3f sd=%.3f min=%+.3f max=%+.3f | "
+                "sact mean=%+.3f sd=%.3f"
+                % (_corr(svp, sva), _corr(lean, sva), ac1,
+                   svp.mean().item(), svp.std().item(),
+                   svp.min().item(), svp.max().item(),
+                   sva.mean().item(), sva.std().item()),
+                flush=True,
+            )
             print(
                 "[BALANCE] corr(lean,wcmd)=%+.3f corr(rate,wcmd)=%+.3f "
                 "corr(lean,wvel)=%+.3f corr(wcmd,wvel)=%+.3f | "
@@ -208,6 +252,8 @@ def reward_climb_progress(env) -> torch.Tensor:
                    wvel.mean().item(), wvel.std().item()),
                 flush=True,
             )
+            env._sact_ac_sum = 0.0
+            env._sact_ac_n = 0
     except Exception as _e:
         # NEVER swallow this one silently -- a bare `except: pass` is why the
         # first version of this probe printed nothing at all and looked like it
