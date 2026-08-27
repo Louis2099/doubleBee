@@ -133,8 +133,17 @@ class DoubleBeeEventsCfg:
                 # The capability is already there: at the 45 deg servo limit and
                 # 10.6 N the restoring moment beats gravity at EVERY lean up to
                 # 90 deg. The policy simply never had a reason to ask for it.
-                "roll": (-0.35, 0.35),    # +/-20 deg
-                "pitch": (-0.35, 0.35),   # +/-20 deg
+                # 20 -> 11 deg on 2026-08-26, after measuring what 20 did.
+                # At +/-20 the run CONVERGED (alpha 0.0163 by iteration 747,
+                # three times faster than the previous run reached 0.005) to a
+                # policy that does not balance: episode length 32-43 against a
+                # passive fall time of 31, corr(lean, wheel_action) = +0.011,
+                # terrain_levels back to 0.0020. Starting every episode already
+                # losing taught it that falling is normal.
+                # 11 deg still needs 13 deg of servo to break even, so the servo
+                # still has a job, without conceding the episode at t=0.
+                "roll": (-0.2, 0.2),      # +/-11 deg
+                "pitch": (-0.2, 0.2),     # +/-11 deg
                 "yaw" :(0.0, 0.0),
                 # "yaw_noise": (0.0, 0.0),  # No yaw noise - perfect alignment toward target 
                 "yaw_noise": (-0.05, 0.05), # ±6° yaw noise
