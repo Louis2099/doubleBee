@@ -486,7 +486,12 @@ class ObservationsCfg:
         # the measurement that motivates it: 300 ms of wheel actuator lag against
         # a 102 ms fall time constant, with only one step of command history the
         # policy cannot know what it has already asked for.
-        actions = ObsTerm(func=action_history, params={"history_length": 5})
+        # history_length SELECTS THE CHECKPOINT GENERATION:
+        #     1 -> obs 40, loads the 2026-08-27_02-28 run (the one that CLIMBS)
+        #     5 -> obs 56, loads the 2026-08-27_04-12 run
+        # Set to 1 to play or deploy the obs-40 checkpoint; the state_dict is
+        # shaped by this and a mismatch is a hard load error, not a silent one.
+        actions = ObsTerm(func=action_history, params={"history_length": 1})
 
         def __post_init__(self):
             """Post-initialization configuration."""

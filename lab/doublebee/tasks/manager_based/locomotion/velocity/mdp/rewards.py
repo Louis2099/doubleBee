@@ -1686,9 +1686,27 @@ class RewardsCfg:
     # earns, so surviving is no longer strictly dominated. Deliberately NOT
     # larger -- overpaying survival produces a robot that stands still, and
     # penalize_prolonged_no_progress is only weight 0.5.
+    # 2.0 -> 0.25 on 2026-08-27. THIS TERM CREATED A SURVIVAL-FARMING OPTIMUM.
+    #
+    # It pays EVERY STEP while upright; terminal_goal_reached pays ONCE (weight
+    # 10.0) and ENDS the episode, truncating that income. So over a 1000-step
+    # episode, surviving is worth 2000 against 10 for finishing -- reaching the
+    # goal costs the policy 200x what it gains.
+    #
+    # Measured across two runs that differ mainly in how well they balance:
+    #     RUN 1  ep_len 175  success 0.34  terrain 0.58  alive 0.35
+    #     RUN 2  ep_len 369  success 0.00  terrain 0.00  alive 0.95
+    # RUN 1 never balanced well enough to cross the threshold, so it still
+    # finished. RUN 2 got BETTER at balancing, crossed it, and locked into
+    # running out the clock -- 33% timeout, 25% out of bounds, and
+    # velocity_direction_alignment went POSITIVE to NEGATIVE, i.e. it started
+    # driving away from the goal on purpose.
+    #
+    # 0.25 keeps the term's original purpose (make survival strictly profitable
+    # so falling is never the best move) without letting it outbid the task.
     reward_alive_upright = RewTerm(
         func=reward_alive_upright,
-        weight=2.0,
+        weight=0.25,
         params={"tol": 0.5},
     )
 
