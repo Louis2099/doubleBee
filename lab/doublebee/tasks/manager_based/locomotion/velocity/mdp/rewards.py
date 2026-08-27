@@ -1557,10 +1557,33 @@ class RewardsCfg:
     # actually offsets gravity and stretches the pendulum time constant from
     # 119 ms to ~217 ms -- the margin the real 40-100 ms actuator delay needs.
     # See reward_vertical_thrust_support for the derivation.
+    # target_frac 0.7 -> 0.35 on 2026-08-26. THIS IS WHAT RESTORES ENERGY
+    # MODULATION, which is the paper's central claim.
+    #
+    # The term saturates at omega = target_frac * 375. At 0.70 that is 262 rad/s
+    # = 17.6 N = 2.46x the 7.17 N static-stability threshold, so the reward kept
+    # paying long past the point where extra thrust buys any stability. Measured
+    # against the energy penalty over the same interval:
+    #
+    #     marginal thrust reward, action 0 -> 1   +1.47
+    #     marginal energy penalty, same move      -0.0335
+    #
+    # 44:1. The optimal propeller action was therefore PINNED AT +1, and the play
+    # log confirms it: raw_action = 0.99 on every tick. A policy that never
+    # modulates thrust cannot demonstrate energy-aware actuation -- the IROS
+    # submission's headline was that it modulated over 1145-1435 us.
+    #
+    # 0.35 saturates at 131 rad/s = 10.1 N = 1.41x threshold. Comfortable margin
+    # for stability, and every rad/s beyond it earns NOTHING while still costing
+    # energy, so spinning down becomes strictly better whenever stability allows.
+    #
+    # Sizing the thrust reward to the STABILITY THRESHOLD rather than to an
+    # arbitrary fraction is the principled version of this: thrust is worth
+    # paying for exactly up to the point it changes whether the robot can stand.
     reward_vertical_thrust_support = RewTerm(
         func=reward_vertical_thrust_support,
         weight=3.0,
-        params={"target_frac": 0.7},
+        params={"target_frac": 0.35},
     )
 
     # Added 2026-08-23. Pays for vertical thrust IN PROPORTION TO LEAN, which
