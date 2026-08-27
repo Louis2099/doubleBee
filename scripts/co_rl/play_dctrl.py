@@ -793,18 +793,62 @@ def main():
             yaw_gain_scale=(1.0 + 1.5 * env._recent_step_max),
         )
 
+        # --- thrust -> action ------------------------------------------------
+        # REWRITTEN 2026-08-26. The old line assumed the propeller action mapped
+        # linearly onto pwm 1000..2000:
+        #     prop_action = 2*(pwm - 1000)/1000 - 1
+        # It does not. The action sets a TARGET velocity, 187.5*(1 + a), and the
+        # joint settles at ~0.402 of that (measured across four AERO DEBUG and
+        # play samples: 373 -> 158, ratio 0.424 / 0.425 / 0.424 / 0.425). pwm is
+        # then built from the ACHIEVED speed, not the target.
+        #
+        # Consequence of the old mapping, measured:
+        #     asks  8.66 N -> gets 3.23 N   (37%)
+        #     asks 17.00 N -> gets 4.12 N   (24%)
+        #
+        # The decoupled baseline has been running on a quarter of the thrust it
+        # commands. Any sim comparison against the RL policy built on that is
+        # not a comparison of controllers, it is a comparison of thrust budgets.
+        PROP_TARGET_RATIO = 0.402      # achieved / commanded, measured
+        PROP_HALF_SPAN = 187.5         # propeller_vel action scale == offset
         pwm = mpc.thrust_to_pwm(out["T"])
-        prop_action  = max(-1.0, min(1.0, 2.0*(pwm-1000.0)/1000.0 - 1.0))
+        omega_want = (min(max(pwm, 1000.0), 1650.0) - 1000.0) / 650.0 * 500.0
+        target_want = omega_want / PROP_TARGET_RATIO
+        prop_action = max(-1.0, min(1.0, target_want / PROP_HALF_SPAN - 1.0))
+
         servo_action = max(-1.0, min(1.0, out["sigma"] / 0.785))
         wheel_action_L = max(-1.0, min(1.0, out["tau_w1"] / 2.0))
         wheel_action_R = max(-1.0, min(1.0, out["tau_w2"] / 2.0))
 
-        actions = torch.tensor(
-            [[wheel_action_L, wheel_action_R,
-              servo_action, servo_action,
-              prop_action,  prop_action]],
-            device=env.unwrapped.device, dtype=torch.float32,
-        )
+        # --- pack for whichever action space this config exposes -------------
+        # ActionsCfg (6): [wheel_L, wheel_R, servo_L, servo_R, prop_L, prop_R]
+        # ActionsCfg4D (4, 2026-08-26): [wheel_COMMON, wheel_DIFF, servo, prop]
+        #
+        # Equivalence between the two, given the mirrored USD wheel axes
+        # (left +X, right -X) and the CommonDiff scales S=47.0, D=8.0:
+        #     common = (a_L + a_R) / 2
+        #     diff   = (a_L - a_R) * S / (2 * D)
+        n_act = int(env.unwrapped.action_manager.total_action_dim)
+        if n_act == 4:
+            S, D = 47.0, 8.0
+            common = 0.5 * (wheel_action_L + wheel_action_R)
+            diff = (wheel_action_L - wheel_action_R) * S / (2.0 * D)
+            diff = max(-1.0, min(1.0, diff))
+            vec = [common, diff, servo_action, prop_action]
+        elif n_act == 6:
+            vec = [wheel_action_L, wheel_action_R,
+                   servo_action, servo_action,
+                   prop_action, prop_action]
+        elif n_act == 3:
+            vec = [0.5 * (wheel_action_L + wheel_action_R),
+                   servo_action, prop_action]
+        else:
+            raise ValueError(
+                "play_dctrl does not know how to pack %d actions. Add the layout "
+                "here -- silently padding would drive the wrong actuators." % n_act)
+
+        actions = torch.tensor([vec], device=env.unwrapped.device,
+                               dtype=torch.float32)
 
         if not hasattr(env, "_mpc_step_count"):
             env._mpc_step_count = 0
