@@ -192,7 +192,28 @@ DOUBLEBEE_CFG = ArticulationCfg(
             #
             # reward_props_upright (weight 5.0) has been paying for world-vertical
             # thrust this whole time; it was simply not ACHIEVABLE during a fall.
-            velocity_limit=10.0,
+            #
+            # REVERTED TO 2.0 on 2026-08-27, SAME DAY. The reasoning above is
+            # still believed correct -- 2.0 does not match the real servo -- but
+            # raising it MADE THE ROBOT WORSE, and the measurement says why.
+            #
+            # The policy inherited from model_3500 never learned this channel,
+            # because at 2.0 rad/s the actuator filtered whatever it commanded.
+            # Measured after the raise (iteration 3622):
+            #     [SERVOLOOP] lag1_ac = +0.017     <- servo command is WHITE NOISE
+            #                 corr(spos,sact) = +0.014
+            #     [SERVOASYM] FWD corr -0.017 | BACK corr +0.080   <- no balance
+            #                                                        work either way
+            # i.e. the servo head is an untrained output emitting noise. Raising
+            # velocity_limit did not give the policy a balance actuator; it gave
+            # an untrained noise source 5x the authority. Play confirms it: this
+            # checkpoint cannot balance, while model_3500 at 2.0 climbs cleanly.
+            #
+            # DO NOT re-raise this on a RESUMED checkpoint. It is only safe from
+            # a FRESH run, where the servo head is trained against the real speed
+            # from the start. Left here as the first thing to try when there is
+            # time for a from-scratch run.
+            velocity_limit=2.0,
             min_delay=2, # guessed, in sim steps at 0.02s = 40-100ms lag
             max_delay=5, # guessed
             stiffness={
