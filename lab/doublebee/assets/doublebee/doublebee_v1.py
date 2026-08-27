@@ -163,7 +163,36 @@ DOUBLEBEE_CFG = ArticulationCfg(
         "propeller_servos": DelayedPDActuatorCfg(
             joint_names_expr=["leftPropellerServo", "rightPropellerServo"],
             effort_limit=5.0,  # Lower effort for servo motors
-            velocity_limit=2.0,
+            # 2.0 -> 10.0 on 2026-08-27. AT 2.0 THE SERVO CANNOT BALANCE AT ALL.
+            #
+            # Three independent numbers in this repo already said 10 rad/s and
+            # this one line disagreed with all of them:
+            #   assets/.../DoubleBee/config.yaml  velocity_limit: 10.0 (this joint)
+            #   db_inference.py:1491,1624,2192    "a hobby servo does 86 deg in
+            #                                      ~0.15 s" = 10 rad/s, measured
+            #   db_inference.py servo_hold_slew_rad_s -- deployment deliberately
+            #                                      REFUSES to rate-limit attitude
+            #                                      hold to sim's 2.0 because it
+            #                                      "loses the race against the fall"
+            #
+            # Time to traverse the +/-45 deg working range:
+            #     2.0 rad/s -> 393 ms = 3.9 tau      10 rad/s -> 79 ms = 0.8 tau
+            # against a 102 ms pendulum time constant and a ~600 ms fall to the
+            # 70 deg termination. At 2.0 the servo spends the whole fall in
+            # transit, so it is not an attitude actuator -- it is a slow trim.
+            #
+            # CONSEQUENCE, which is what sent us looking: the policy cannot use
+            # the servo to catch a fall, so it spends it on the one job that IS
+            # reachable at 2 rad/s -- a quasi-static forward tilt for propulsion,
+            # paid by reward_progress_to_target (weight 10.0). That produces the
+            # asymmetry observed on hardware: the servo appears to help a
+            # BACKWARD fall (the propulsion tilt is already restoring, no motion
+            # needed) and never a FORWARD one (needs a fast reversal it cannot
+            # execute). Forward is the common failure.
+            #
+            # reward_props_upright (weight 5.0) has been paying for world-vertical
+            # thrust this whole time; it was simply not ACHIEVABLE during a fall.
+            velocity_limit=10.0,
             min_delay=2, # guessed, in sim steps at 0.02s = 40-100ms lag
             max_delay=5, # guessed
             stiffness={

@@ -190,7 +190,28 @@ def reward_climb_progress(env) -> torch.Tensor:
         # tick. A value near -1 means the policy alternates its servo command
         # every step -- the failure mode measured on hardware (hw_v17.csv,
         # corr(servo_pos, servo_act) = -1.000).
-        _sa = env.action_manager.action[:, 1]
+        #
+        # 2026-08-27: THIS WAS READING THE WRONG ACTION INDEX.
+        #
+        # Hardcoded [:, 1] was the servo under the PRE-2026-08-26 layout
+        # {wheel:0, servo:1, prop:2,3}. ActionsCfg4D now maps
+        # {wheel_common:0, wheel_diff:1, servo:2, prop:3}, so index 1 has been
+        # the WHEEL DIFFERENTIAL since the CommonDiff change. Every
+        # corr(spos,sact) / corr(lean,sact) / lag1_ac printed since then
+        # correlated servo POSITION against a WHEEL command -- they say nothing
+        # about the servo loop. Resolve by term name so a future remap cannot
+        # silently break it again.
+        if not hasattr(env, "_servo_act_idx"):
+            _idx, _found = 0, None
+            for _name, _term in env.action_manager._terms.items():
+                if _name == "propeller_servo_pos":
+                    _found = _idx
+                    break
+                _idx += _term.action_dim
+            env._servo_act_idx = _found
+        _si = env._servo_act_idx
+        _sa = (env.action_manager.action[:, _si] if _si is not None
+               else torch.zeros(env.num_envs, device=env.device))
         if env._sact_prev is not None:
             _a = _sa - _sa.mean()
             _b = env._sact_prev - env._sact_prev.mean()
@@ -217,7 +238,7 @@ def reward_climb_progress(env) -> torch.Tensor:
             #   ac1                         is whether SIM's own servo alternates
             sj_l = robot.joint_names.index("leftPropellerServo")
             svp = robot.data.joint_pos[:, sj_l]
-            sva = env.action_manager.action[:, 1]
+            sva = _sa   # resolved by term name above, NOT hardcoded index 1
             # lag-1 correlation must be TEMPORAL (this tick vs last tick), not
             # across envs -- env i against env i+1 measures nothing. Accumulated
             # every tick below and averaged over the 50-tick print interval.
@@ -241,6 +262,44 @@ def reward_climb_progress(env) -> torch.Tensor:
                    sva.mean().item(), sva.std().item()),
                 flush=True,
             )
+            # SERVO ASYMMETRY, added 2026-08-27 to test a hardware observation:
+            # "servos only help the lean when falling BACK, never when falling
+            # FORWARD, because they are being used to move forward -- and
+            # forward is the most common failure."
+            #
+            # The two uses demand OPPOSITE tilts. Propulsion needs horizontal
+            # thrust pointing forward, which at a 0.4476 m arm above the axle
+            # torques the body further forward. Recovery from a forward fall
+            # needs the opposite. So a policy paid for progress (weight 10.0)
+            # learns the propulsion tilt and is then holding exactly the wrong
+            # servo angle at the moment a forward fall starts. Backward falls
+            # get recovery for free, because there the propulsion tilt IS the
+            # restoring tilt -- which is why the asymmetry shows up as "helps
+            # one way only" rather than "never helps".
+            #
+            # lean = projected_gravity_b[:, 1]; rewards.py uses
+            # pitch_signed = -that as "positive when pitched FORWARD", so here
+            # lean < 0 is FORWARD lean and lean > 0 is BACKWARD lean.
+            #
+            # Read it as: if the servo is doing balance work, |corr| should be
+            # comparable in both bins and the SIGNS SHOULD MATCH (same restoring
+            # convention either way). A strong correlation in the back bin and
+            # ~0 or opposite-signed in the fwd bin confirms the observation.
+            _fwd = lean < -0.02
+            _bck = lean > 0.02
+            _nf, _nb = int(_fwd.sum()), int(_bck.sum())
+            _cf = _corr(lean[_fwd], sva[_fwd]) if _nf > 8 else float("nan")
+            _cb = _corr(lean[_bck], sva[_bck]) if _nb > 8 else float("nan")
+            print(
+                "[SERVOASYM] FWD-lean n=%4d corr(lean,sact)=%+.3f sact=%+.3f | "
+                "BACK-lean n=%4d corr(lean,sact)=%+.3f sact=%+.3f"
+                % (_nf, _cf,
+                   sva[_fwd].mean().item() if _nf > 0 else float("nan"),
+                   _nb, _cb,
+                   sva[_bck].mean().item() if _nb > 0 else float("nan")),
+                flush=True,
+            )
+
             print(
                 "[BALANCE] corr(lean,wcmd)=%+.3f corr(rate,wcmd)=%+.3f "
                 "corr(lean,wvel)=%+.3f corr(wcmd,wvel)=%+.3f | "
