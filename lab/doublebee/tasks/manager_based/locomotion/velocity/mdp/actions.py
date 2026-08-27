@@ -624,8 +624,29 @@ class ActionsCfg4D:
         asset_name="robot",
         joint_names=["leftPropeller", "rightPropeller"],
         scale=1.0,                                    # must stay a float (CUDA)
-        tied_scale={"leftPropeller": 187.5, "rightPropeller": -187.5},
-        tied_offset={"leftPropeller": 187.5, "rightPropeller": -187.5},
+        # 187.5 -> 320 on 2026-08-26. THE ACTION SPACE WAS THE THRUST CEILING.
+        #
+        # scale == offset == 187.5 caps the commanded TARGET at 375 rad/s. The
+        # joint settles at 0.402 of target (measured: 373 -> 158 across four
+        # samples), so achieved speed capped at 151 rad/s = pwm 1196 = 11.1 N
+        # total. The real robot hovers at BB_HOV_DC = 1335 pwm = 17.3 N, and the
+        # decoupled baseline's T_hold alone needs that.
+        #
+        # Two things were wrong because of it:
+        #   - the policy could never command more than 2/3 of the robot's hover
+        #     thrust, so it never learned to
+        #   - the decoupled baseline, driven through this same action space, got
+        #     33% of the thrust it asked for. A comparison on those terms is a
+        #     comparison of thrust budgets, not of controllers.
+        #
+        # 320 gives target 640 -> achieved 257 -> pwm 1335 -> 17.3 N, matching
+        # the real hover point. T/W becomes 0.55, still well short of the 0.83
+        # that unloads the wheels and costs traction.
+        #
+        # NOTE this changes action SEMANTICS, not dimensions: any checkpoint
+        # trained at 187.5 will command 1.7x the thrust if run at 320. Retrain.
+        tied_scale={"leftPropeller": 320.0, "rightPropeller": -320.0},
+        tied_offset={"leftPropeller": 320.0, "rightPropeller": -320.0},
         use_default_offset=False,
         preserve_order=True,
     )
