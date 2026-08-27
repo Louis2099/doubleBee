@@ -253,6 +253,61 @@ def wheel_contact(
 ##
 
 
+
+def action_history(env, history_length: int = 5):
+    """Last `history_length` actions, NEWEST FIRST, flattened.
+
+    Added 2026-08-26. The policy previously saw one step of action history, and
+    that is not enough on this machine.
+
+    MEASURED, hw_v18.csv, across five engaged segments:
+        lean -> wheel_action        lag  0 ticks (  0 ms), r = -0.75..-0.80
+        wheel_des -> wheel_meas     lag 15 ticks (300 ms), r = +0.74..+0.84
+
+    State estimation is not the problem -- the policy reacts to attitude with no
+    measurable lag. The WHEELS are the problem: 300 ms from command to response,
+    dominated by the 43 rad/s^2 acceleration limit rather than transport delay.
+    Against a 102 ms fall time constant, a policy that cannot see what it has
+    already commanded and not yet received is flying blind about half its own
+    dynamics. That is why it balances (small corrections) but falls when it
+    commits to forward motion (a sustained acceleration whose pitch reaction
+    arrives 300 ms later).
+
+    Five steps is 100 ms -- the fast part of the wheel response -- for 4*5 = 20
+    dimensions instead of 4. Longer would cover more of the 300 ms but the tail
+    is smooth and largely redundant.
+
+    ORDERING IS EXPLICIT AND MUST MATCH DEPLOYMENT:
+        [a(t-1) dims..., a(t-2) dims..., ..., a(t-N) dims...]
+    i.e. newest first. Written by hand rather than using IsaacLab's
+    ObsTerm(history_length=...) precisely so the convention is pinned here and
+    db_inference.py can be made to agree by construction. A silent ordering
+    mismatch between sim and hardware is invisible in every log we produce.
+    """
+    act = env.action_manager.action
+    n, d = act.shape
+    if (not hasattr(env, "_act_hist")) or tuple(env._act_hist.shape) != (n, history_length, d):
+        env._act_hist = torch.zeros(n, history_length, d, device=act.device)
+        env._act_hist_step = -1
+
+    # This function is called once per OBSERVATION GROUP, and there are two
+    # (policy and value). Shifting on every call would advance history twice per
+    # environment step. Gate on the step counter so the buffer advances once.
+    step = int(getattr(env, "common_step_counter", 0))
+    if step != env._act_hist_step:
+        env._act_hist_step = step
+        env._act_hist = torch.roll(env._act_hist, 1, dims=1)
+        env._act_hist[:, 0] = act
+        # Freshly reset environments must not inherit the previous episode's
+        # commands -- that history describes a robot that no longer exists.
+        elb = getattr(env, "episode_length_buf", None)
+        if elb is not None:
+            fresh = elb == 0
+            if bool(fresh.any()):
+                env._act_hist[fresh] = 0.0
+    return env._act_hist.reshape(n, -1)
+
+
 @configclass
 class ObservationsCfg:
     """Observation specifications for DoubleBee robot.
@@ -427,8 +482,11 @@ class ObservationsCfg:
         # 5. Action History (For temporal consistency)
         # ========================================
         
-        # Last actions - Helps policy understand action effects
-        actions = ObsTerm(func=mdp.last_action)
+        # Action HISTORY, not just the last one. See action_history() above for
+        # the measurement that motivates it: 300 ms of wheel actuator lag against
+        # a 102 ms fall time constant, with only one step of command history the
+        # policy cannot know what it has already asked for.
+        actions = ObsTerm(func=action_history, params={"history_length": 5})
 
         def __post_init__(self):
             """Post-initialization configuration."""

@@ -1547,10 +1547,21 @@ class RewardsCfg:
         weight=5.0, # WASS 3.0
     )
 
+    # 5.0 -> 2.0 on 2026-08-26. THE PROPELLER TERMS HAD TAKEN OVER THE REWARD.
+    #
+    # Measured at iteration 358, summed over the whole set:
+    #     propeller rewards   +0.2643  (6 terms)
+    #     task rewards        +0.1405  (7 terms)
+    # The policy was being paid 88% MORE for propeller posture than for doing
+    # the task, and props_upright at 0.1239 was the single largest term in the
+    # entire reward -- larger than progress_to_target and alive_upright combined.
+    #
+    # It was raised to 5.0 when the props genuinely were not pointing up
+    # (z_frac 0.41). They are now: measured z_frac mean 0.85-0.86, max 1.000,
+    # after the left-propeller frame fix. The reason for 5.0 no longer holds.
     reward_props_upright = RewTerm(
         func=reward_props_upright,
-        weight=5.0, # WAS 1.5 / 0.5. Raised 2026-08-21: measured z_frac ~= 0.41,
-                    # i.e. the props spent most of the episode NOT pointing up.
+        weight=2.0,
     )
 
     # Added 2026-08-21. Rewards props pointing up *and pushing*, which is what
@@ -1580,9 +1591,20 @@ class RewardsCfg:
     # Sizing the thrust reward to the STABILITY THRESHOLD rather than to an
     # arbitrary fraction is the principled version of this: thrust is worth
     # paying for exactly up to the point it changes whether the robot can stand.
+    # weight 3.0 -> 1.5, COMPENSATING THE target_frac CHANGE.
+    #
+    # The term is clamp(vert / target_frac), so halving target_frac (0.7 -> 0.35)
+    # does two things, and only one was intended: it moves WHERE the reward
+    # saturates (intended -- see above), and it DOUBLES the reward everywhere
+    # below saturation (not intended). Measured, this term went 0.0155 -> 0.0820
+    # across the recent changes, becoming the second-largest in the set.
+    #
+    # Halving the weight keeps the earlier saturation -- which is what produces
+    # thrust modulation -- while restoring the term's original magnitude, so it
+    # no longer crowds out progress_to_target and alive_upright.
     reward_vertical_thrust_support = RewTerm(
         func=reward_vertical_thrust_support,
-        weight=3.0,
+        weight=1.5,
         params={"target_frac": 0.35},
     )
 

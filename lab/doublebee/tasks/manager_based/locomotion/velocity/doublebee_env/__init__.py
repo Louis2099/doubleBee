@@ -8,7 +8,7 @@
 import gymnasium as gym
 
 from . import agents
-from .flat_env.hybrid_stair.hybrid_stair_cfg import DoubleBeeHybridStairCfg, DoubleBeeHybridStairCfg_PLAY
+from .flat_env.hybrid_stair.hybrid_stair_cfg import DoubleBeeHybridStairCfg, DoubleBeeHybridStairCfg_PLAY, DoubleBeeHybridStairConstantThrustCfg
 from .flat_env.inverted_pendulum import DoubleBeeInvertedPendulumCfg, DoubleBeeInvertedPendulumCfg_PLAY
 from .velocity_env_cfg import DoubleBeeVelocityEnvCfg
 
@@ -38,6 +38,22 @@ gym.register(
     kwargs={
         # TODO: remove ppo from the naming
         "env_cfg_entry_point": DoubleBeeHybridStairCfg_PLAY,
+        "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+    },
+)
+
+
+# FIXED-ALLOCATION BASELINE, 2026-08-26. Same task, same reward, same algorithm;
+# propellers pinned instead of modulated. Answers IROS R1's "how much better than
+# a well-designed mode-switching controller" without anything to hand-tune.
+gym.register(
+    id="Isaac-Velocity-HybridStair-DoubleBee-ConstThrust-v1-ppo",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": DoubleBeeHybridStairConstantThrustCfg,
         "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
         "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
         "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
