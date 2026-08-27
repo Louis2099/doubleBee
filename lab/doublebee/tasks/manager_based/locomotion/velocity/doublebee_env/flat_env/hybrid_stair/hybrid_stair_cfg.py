@@ -148,8 +148,9 @@ class DoubleBeeEventsCfg:
                 # already carrying enough new variables. The servo-behaviour
                 # argument for reset DR still stands, but it is not what the
                 # paper needs in the next 19 days.
-                "roll": (-0.05, 0.05),    # +/-3 deg
-                "pitch": (-0.05, 0.05),   # +/-3 deg
+                # RESTORED (-0.2, 0.2) from model_3500_params/env.yaml.
+                "roll": (-0.2, 0.2),      # +/-11 deg
+                "pitch": (-0.2, 0.2),     # +/-11 deg
                 "yaw" :(0.0, 0.0),
                 # "yaw_noise": (0.0, 0.0),  # No yaw noise - perfect alignment toward target 
                 "yaw_noise": (-0.05, 0.05), # ±6° yaw noise

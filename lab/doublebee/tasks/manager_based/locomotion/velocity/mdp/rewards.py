@@ -442,7 +442,9 @@ def penalize_cross_track_error(env) -> torch.Tensor:
 
     return -x_deviation
 
-def terminal_reward_goal_reached(env) -> torch.Tensor:
+def terminal_reward_goal_reached(env, alive_weight: float = 0.0,
+                                 terminal_weight: float = 10.0,
+                                 reward_value: float = 100.0) -> torch.Tensor:
     """Terminal reward for successfully reaching the goal.
     
     Returns a positive reward only when the robot reaches the goal (goal_reached constraint is active).
@@ -458,14 +460,51 @@ def terminal_reward_goal_reached(env) -> torch.Tensor:
     """
     # Import constraint function to check if goal is reached
     from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.constraints import goal_reached
-    
+
     # Check if goal is reached (constraint is active)
     goal_reached_mask = goal_reached(env, distance_threshold=0.25)  # [num_envs]
-    
-    # Return positive reward only for environments where goal is reached
-    reward_value = 100  # Positive terminal reward
-    rewards = goal_reached_mask * reward_value
-    
+
+    rewards = goal_reached_mask * float(reward_value)
+
+    # ---- FORFEITED-INCOME COMPENSATION, added 2026-08-27 -------------------
+    #
+    # Reaching the goal ENDS the episode, which cuts off every per-step reward
+    # the policy would have collected for the rest of it. reward_alive_upright
+    # pays `alive_weight` per step while upright, so finishing at step t costs
+    # the policy alive_weight * (T - t) and gains it only the terminal bonus.
+    #
+    # Measured, over a 1000-step cap with alive_weight 2.0 and terminal 10.0:
+    #     episode length 175  -> forfeits 1650, gains 10
+    #     episode length 369  -> forfeits 1262, gains 10
+    # Farming strictly dominates AT EVERY EPISODE LENGTH.
+    #
+    # RUN 1 (2026-08-27_02-28) still went for the goal only because it could not
+    # actually survive to the cap -- episodes ended by tilt at ~175 steps, so the
+    # alive income was not reachable. RUN 2 gained enough balance (action history
+    # against 300 ms of wheel lag) to reach 369 steps with 33% timeouts, at which
+    # point the exploit became available and it took it: success 0.34 -> 0.00,
+    # terrain 0.58 -> 0.00, and velocity_direction_alignment went NEGATIVE, i.e.
+    # it drove away from the goal deliberately.
+    #
+    # The improvement unlocked the bug. Lowering alive_weight only moves the
+    # threshold -- a better policy crosses it again. Paying the forfeited income
+    # AS PART OF the terminal bonus removes the trap instead: finishing early and
+    # surviving to the cap become worth the same, so the goal bonus is pure
+    # profit on top and the policy finishes AS FAST AS IT CAN.
+    #
+    # alive_weight and terminal_weight MUST match RewardsCfg. They are passed in
+    # rather than read from the reward manager because the manager's term-config
+    # accessor is not stable across IsaacLab versions; the assert below catches
+    # the drift that duplication invites.
+    if alive_weight > 0.0:
+        assert terminal_weight > 0.0, "terminal_weight must be positive"
+        steps_left = torch.clamp(
+            env.max_episode_length - env.episode_length_buf.float(), min=0.0)
+        # expressed in units of THIS term, since RewTerm multiplies by
+        # terminal_weight afterwards
+        comp = (alive_weight / terminal_weight) * steps_left
+        rewards = rewards + goal_reached_mask * comp
+
     return rewards
 
 def terminal_reward_propeller_collision(env) -> torch.Tensor:
@@ -1252,30 +1291,11 @@ def reward_thrust_recovery_under_lean(env, lean_onset: float = 0.05) -> torch.Te
         # Saturating at 30 deg keeps the gradient concentrated in the band where
         # thrust can still save it rather than rewarding heroics at 60 deg.
         lean_sin = torch.linalg.norm(robot.data.projected_gravity_b[:, :2], dim=1)
-        urgency_pos = torch.clamp((lean_sin - lean_onset) / (0.5 - lean_onset), 0.0, 1.0)
-
-        # RATE TERM added 2026-08-26. urgency was position-only: it paid for
-        # thrust in proportion to HOW FAR the robot had already fallen, never
-        # for how FAST it was falling. That is a lagging signal on a plant whose
-        # whole problem is speed -- tau = 102 ms, and the wheel response measured
-        # on hardware is 300 ms (hw_v18: wheel_des -> wheel_meas, lag 15 ticks,
-        # r = +0.79). By the time lean_sin is large enough to pay well, thrust
-        # arrives after the fall is decided.
-        #
-        # The rate about body X is the same axis the propellers act in, and it
-        # leads the angle: at 2 rad/s the robot covers 23 deg in the 200 ms it
-        # takes thrust to build. Normalised by 3.0 rad/s, which is a decisive
-        # tip rather than ordinary manoeuvring wobble.
-        #
-        # Combined with `max` rather than a sum: either a large lean OR a fast
-        # one is a reason to put thrust up, and the policy should not need both.
-        # A sum would also double-count during a genuine fall, when the angle
-        # and the rate are large together, and quietly inflate this term's share
-        # of the reward budget -- which is the mistake that put the propeller
-        # terms 88% above the task rewards in the first place.
-        lean_rate = robot.data.root_ang_vel_b[:, :2].norm(dim=1)
-        urgency_rate = torch.clamp(lean_rate / 3.0, 0.0, 1.0)
-        urgency = torch.maximum(urgency_pos, urgency_rate)
+        # POSITION-ONLY, as in model_3500_params/env.yaml. A rate term
+        # (urgency = max(position, rate)) was added on 2026-08-26 and is a good
+        # idea, but it was NOT in the run that works. Re-add it as a deliberate
+        # experiment against this baseline, not as part of it.
+        urgency = torch.clamp((lean_sin - lean_onset) / (0.5 - lean_onset), 0.0, 1.0)
 
         # vertical component of thrust actually being produced
         prop_quat = robot.data.body_quat_w[:, prop_ids, :]
@@ -1444,8 +1464,14 @@ class RewardsCfg:
 
     # ========== Terminal Rewards ==========
     
+    # alive_weight/terminal_weight MUST mirror reward_alive_upright's weight and
+    # this term's weight. See terminal_reward_goal_reached for why: without the
+    # compensation, finishing the task costs the policy more than it gains, and a
+    # policy that balances well enough will farm the clock instead (measured,
+    # RUN 2: success 0.34 -> 0.00 purely from getting BETTER at balancing).
     terminal_goal_reached = RewTerm(
         func=terminal_reward_goal_reached,
+        params={"alive_weight": 2.0, "terminal_weight": 10.0},
         weight=10.0, # was 1.0
     )
     """Terminal reward for successfully reaching the goal.
@@ -1582,9 +1608,10 @@ class RewardsCfg:
     # It was raised to 5.0 when the props genuinely were not pointing up
     # (z_frac 0.41). They are now: measured z_frac mean 0.85-0.86, max 1.000,
     # after the left-propeller frame fix. The reason for 5.0 no longer holds.
+    # RESTORED 5.0 (model_3500_params/env.yaml).
     reward_props_upright = RewTerm(
         func=reward_props_upright,
-        weight=2.0,
+        weight=5.0,
     )
 
     # Added 2026-08-21. Rewards props pointing up *and pushing*, which is what
@@ -1625,9 +1652,11 @@ class RewardsCfg:
     # Halving the weight keeps the earlier saturation -- which is what produces
     # thrust modulation -- while restoring the term's original magnitude, so it
     # no longer crowds out progress_to_target and alive_upright.
+    # RESTORED weight 3.0 (model_3500_params/env.yaml). target_frac 0.35 was
+    # ALREADY 0.35 in that run -- it is not part of the revert.
     reward_vertical_thrust_support = RewTerm(
         func=reward_vertical_thrust_support,
-        weight=1.5,
+        weight=3.0,
         params={"target_frac": 0.35},
     )
 
@@ -1704,9 +1733,12 @@ class RewardsCfg:
     #
     # 0.25 keeps the term's original purpose (make survival strictly profitable
     # so falling is never the best move) without letting it outbid the task.
+    # RESTORED 2.0 (model_3500_params/env.yaml). NOTE: this is the weight that
+    # produced RUN 2's survival-farming failure -- but RUN 1 used it and still
+    # reached 34% success, so it is NOT the thing to change while reproducing.
     reward_alive_upright = RewTerm(
         func=reward_alive_upright,
-        weight=0.25,
+        weight=2.0,
         params={"tol": 0.5},
     )
 

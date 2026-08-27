@@ -1,0 +1,12 @@
+-  python db_inference.py \                                                                                              
+  --model_path ~/doublebee_PID_JAI/ckpts/latest/model_3500.pt \
+  --wheel_action_scale 47.0 --wheel_scale 0.7 \
+  --sim_servo_limit_rad 0.7854 --servo_slew_rad_s 10.0 \
+  --servo_obs_source lowpass \
+  --servo_attitude_hold --servo_hold_sign -1.0 \
+  --servo_hold_damping 0.15 --servo_hold_slew_rad_s 10.0 \
+  --roboclaw_accel 13139 \
+  --contact 0.0 --base_z_offset -0.0315 \
+  --action_scale 1.0 --prop_scale 2.0 --servo_scale 1.0 \
+  --prop_map sim_damped --prewarm --prop_min_frac 0.35 \
+  --log_path hw_v24.csv

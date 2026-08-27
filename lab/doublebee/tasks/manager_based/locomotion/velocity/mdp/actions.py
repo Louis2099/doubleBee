@@ -710,8 +710,10 @@ class ActionsCfg4D:
         #     scale 320   -> max 257 rad/s -> band 131..257 (wide)
         # A wider band is better for demonstrating energy modulation. If the
         # modulation result looks thin, 250 is the middle option (max 201).
-        tied_scale={"leftPropeller": 187.5, "rightPropeller": -187.5},
-        tied_offset={"leftPropeller": 187.5, "rightPropeller": -187.5},
+        # RESTORED to 320.0 on 2026-08-27 from model_3500_params/env.yaml --
+        # the config that actually produced the working checkpoint.
+        tied_scale={"leftPropeller": 320.0, "rightPropeller": -320.0},
+        tied_offset={"leftPropeller": 320.0, "rightPropeller": -320.0},
         use_default_offset=False,
         preserve_order=True,
     )
