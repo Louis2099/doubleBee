@@ -1668,9 +1668,34 @@ class RewardsCfg:
     # (z_frac 0.41). They are now: measured z_frac mean 0.85-0.86, max 1.000,
     # after the left-propeller frame fix. The reason for 5.0 no longer holds.
     # RESTORED 5.0 (model_3500_params/env.yaml).
+
+    # 2026-08-27: HALVED. THESE THREE ARE POSITION-INDEPENDENT INCOME.
+    #
+    # Observed in play on model_3500: the robot "climbs really nice but in
+    # random places and circles around", i.e. the locomotion is solved and the
+    # NAVIGATION is not. Measured reward split at iteration 3622:
+    #     prop posture (6 terms)   0.2708
+    #     task         (7 terms)   0.1393     ratio 1.94:1
+    #
+    # props_upright, vertical_thrust_support and thrust_recovery_under_lean can
+    # ALL be earned standing still, circling, or anywhere on the map -- they are
+    # functions of attitude and thrust only. reward_progress_to_target requires
+    # being in a PARTICULAR PLACE. When the position-independent income is 2x
+    # the position-dependent income, circling while holding a good prop pose is
+    # strictly better than driving to the goal. That is the observed behaviour.
+    #
+    # Halving these three brings prop posture to ~0.135 against task 0.139, so
+    # going somewhere finally outbids posing. NOT cut further: the pose still has
+    # to be worth holding, and thrust is what makes the machine stable at all.
+    #
+    # THIS DOES NOT ENDANGER THE HARDWARE "PROPS PINNED UP" REQUIREMENT.
+    # At deployment, --servo_attitude_hold OVERWRITES the policy's servo action
+    # outright (db_inference.py: action[layout["servo"][0]] = act_units), so
+    # props-up on the real robot is guaranteed by the PID hold, not by this
+    # reward. These weights govern sim behaviour only.
     reward_props_upright = RewTerm(
         func=reward_props_upright,
-        weight=5.0,
+        weight=2.5,  # was 5.0
     )
 
     # Added 2026-08-21. Rewards props pointing up *and pushing*, which is what
@@ -1715,7 +1740,7 @@ class RewardsCfg:
     # ALREADY 0.35 in that run -- it is not part of the revert.
     reward_vertical_thrust_support = RewTerm(
         func=reward_vertical_thrust_support,
-        weight=3.0,
+        weight=1.5,  # was 3.0 -- see the position-independent note above
         params={"target_frac": 0.35},
     )
 
@@ -1734,7 +1759,7 @@ class RewardsCfg:
     # far worse than the one it risks.
     reward_thrust_recovery_under_lean = RewTerm(
         func=reward_thrust_recovery_under_lean,
-        weight=6.0,
+        weight=3.0,  # was 6.0 -- see the position-independent note above
         params={"lean_onset": 0.05},
     )
 
