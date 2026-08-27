@@ -1,0 +1,32 @@
+What each panel shows:
+
+(a) thrust vs PWM — your 11 bench points and the degree-4 polynomial that sim uses. The dotted line is W/2 per propeller, so where the curve crosses it, two props equal body weight (~1570 µs). The dashed line is your real hover point, 1335 µs.
+
+(b) power vs PWM — same, for electrical watts. Note it's steeper than thrust: doubling thrust costs far more than double the power.
+
+(c) residuals — how far the fits sit from the measurements, as % of reading. Thrust is essentially exact (worst 0.089%); power is worse at the bottom end (−3.65% at 1100 µs) where absolute values are small.
+
+(d) propeller efficiency, N/W — the only panel that makes an argument. Efficiency falls 66% from 1100 to 2000 µs. That is the physical reason a policy that modulates thrust beats one holding constant hover: every watt spent above the minimum buys progressively less thrust. Your entire energy claim rests on this curve, and right now the paper asserts it rather than showing it.
+
+Does it deserve a place? Panel (d) yes. Panels (a)–(c) not as they stand — and here's the honest problem.
+
+You fit 5 coefficients to 11 points and then report the residuals of that same fit. That's calibration error, not validation error. Any reviewer who notices will say "of course a quartic fits 11 points," and R4 asked specifically for "calibration and validation of the energy/power model." Right now I can only give you the calibration half.
+
+Since the robot is next to you, two things turn this into real validation:
+
+1. Six interleaved bench points — 30 minutes. Measure thrust and power at 1050, 1150, 1250, 1350, 1450, 1550 µs — the midpoints between your existing samples. Those are held-out: the fit has never seen them. Then panel (c) becomes prediction error on unseen data, which is what validation means. Add them to PWM2TE.csv in a split column and I'll update the script to plot fit vs held-out separately.
+
+2. The stronger one, and it's nearly free — end-to-end energy validation. You already record accumulated ∫V·I dt from the flight controller (356 J for the RL trial, 571 J for Decouple 1 in the IROS submission). So for every trial you have both:
+
+predicted energy: integrate the power model over the commanded PWM trace
+measured energy: the FCU's ∫V·I dt
+Plot predicted vs measured, one point per trial, against a y = x line. That validates the model on the actual task, at real operating points, including battery sag and ESC losses the bench never saw. It's a much better figure than a bench re-measurement, and it directly answers R4.
+
+If they diverge, that's also publishable — it quantifies how much your bench model understates true consumption, which is exactly the kind of detail the review said was missing.
+
+Do #2 with data you already have. Point me at one FCU log alongside its hw_*.csv and I'll write the comparison.
+
+---
+
+The thrust and power models are degree-4 fits to 11 bench measurements spanning 1000–2000 µs, with calibration RMSE 0.0039 N and 1.65 W (0.013% and 0.148% of range). Propeller efficiency falls 66% across this range, from 0.087 N/W at 1100 µs to 0.029 N/W at 2000 µs; holding at T/W 0.55 costs 41% of the power required to hover.
+

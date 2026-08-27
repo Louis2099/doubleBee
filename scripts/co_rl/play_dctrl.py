@@ -799,12 +799,29 @@ def main():
         wheel_action_L = max(-1.0, min(1.0, out["tau_w1"] / 2.0))
         wheel_action_R = max(-1.0, min(1.0, out["tau_w2"] / 2.0))
 
-        actions = torch.tensor(
-            [[wheel_action_L, wheel_action_R,
-              servo_action, servo_action,
-              prop_action,  prop_action]],
-            device=env.unwrapped.device, dtype=torch.float32,
-        )
+        # Pack for whichever action space the loaded config exposes.
+        #   6 = ActionsCfg      [wL, wR, servoL, servoR, propL, propR]
+        #   4 = ActionsCfg4D    [wheel COMMON, wheel DIFF, servo, prop]  (2026-08-26)
+        #   3 = earlier 4D      [wheel, servo, prop]
+        # For the 4-dim case, common/diff reproduce the per-wheel commands exactly
+        # given the CommonDiff scales S=47.0, D=8.0:
+        #     common = (aL + aR)/2 ,  diff = (aL - aR) * S / (2D)
+        _n = int(env.unwrapped.action_manager.total_action_dim)
+        if _n == 6:
+            _vec = [wheel_action_L, wheel_action_R,
+                    servo_action, servo_action, prop_action, prop_action]
+        elif _n == 4:
+            _S, _D = 47.0, 8.0
+            _c = 0.5 * (wheel_action_L + wheel_action_R)
+            _d = max(-1.0, min(1.0, (wheel_action_L - wheel_action_R) * _S / (2.0 * _D)))
+            _vec = [_c, _d, servo_action, prop_action]
+        elif _n == 3:
+            _vec = [0.5 * (wheel_action_L + wheel_action_R), servo_action, prop_action]
+        else:
+            raise ValueError("play_dctrl: unknown action dim %d" % _n)
+
+        actions = torch.tensor([_vec], device=env.unwrapped.device,
+                               dtype=torch.float32)
 
         if not hasattr(env, "_mpc_step_count"):
             env._mpc_step_count = 0

@@ -1,0 +1,17 @@
+Here's the thing — you don't need the PID to answer R1. His actual objection was "how much better is it than a well-designed mode-switching controller?" The substance is: does learned thrust modulation beat not modulating? A hand-tuned PID is one way to ask that, and it's the expensive way, because it needs a human to tune it and it has to survive sim-to-real.
+
+The cheap way is a training run: constant-thrust hybrid. Propellers held at a fixed value, wheels and servos learned normally. That's the non-modulating alternative — and it requires zero tuning, because there's nothing to tune. It's optimized by the same algorithm on the same task, so nobody can say you crippled it.
+
+Against that, your comparison becomes:
+
+
+learned modulation      the policy
+fixed thrust            constant-thrust hybrid   <- replaces the PID
+no thrust               wheels-only
+thrust only             propeller-only
+energy weight sweep     the Pareto front
+That set answers R1's substance better than the PID would have, because every entry is trained by the same optimizer rather than tuned by a tired human at 2am. And "we compare against a non-modulating fixed-allocation controller" is a cleaner sentence than "we compare against a controller we retuned."
+
+Implementation is ~10 lines — a tied propeller action that ignores its input and emits a constant. Not tonight. Say the word tomorrow and it's done before your coffee.
+
+Tonight: launch the fresh run and stop. It carries the six changes, and the single thing that matters in the morning is whether the propeller raw_action varies instead of pinning at 0.99. If it does, you have the modulation result the paper claims — and the baseline question gets easier, because you'll have something real to compare against.
