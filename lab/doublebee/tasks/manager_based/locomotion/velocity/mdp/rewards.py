@@ -1252,7 +1252,30 @@ def reward_thrust_recovery_under_lean(env, lean_onset: float = 0.05) -> torch.Te
         # Saturating at 30 deg keeps the gradient concentrated in the band where
         # thrust can still save it rather than rewarding heroics at 60 deg.
         lean_sin = torch.linalg.norm(robot.data.projected_gravity_b[:, :2], dim=1)
-        urgency = torch.clamp((lean_sin - lean_onset) / (0.5 - lean_onset), 0.0, 1.0)
+        urgency_pos = torch.clamp((lean_sin - lean_onset) / (0.5 - lean_onset), 0.0, 1.0)
+
+        # RATE TERM added 2026-08-26. urgency was position-only: it paid for
+        # thrust in proportion to HOW FAR the robot had already fallen, never
+        # for how FAST it was falling. That is a lagging signal on a plant whose
+        # whole problem is speed -- tau = 102 ms, and the wheel response measured
+        # on hardware is 300 ms (hw_v18: wheel_des -> wheel_meas, lag 15 ticks,
+        # r = +0.79). By the time lean_sin is large enough to pay well, thrust
+        # arrives after the fall is decided.
+        #
+        # The rate about body X is the same axis the propellers act in, and it
+        # leads the angle: at 2 rad/s the robot covers 23 deg in the 200 ms it
+        # takes thrust to build. Normalised by 3.0 rad/s, which is a decisive
+        # tip rather than ordinary manoeuvring wobble.
+        #
+        # Combined with `max` rather than a sum: either a large lean OR a fast
+        # one is a reason to put thrust up, and the policy should not need both.
+        # A sum would also double-count during a genuine fall, when the angle
+        # and the rate are large together, and quietly inflate this term's share
+        # of the reward budget -- which is the mistake that put the propeller
+        # terms 88% above the task rewards in the first place.
+        lean_rate = robot.data.root_ang_vel_b[:, :2].norm(dim=1)
+        urgency_rate = torch.clamp(lean_rate / 3.0, 0.0, 1.0)
+        urgency = torch.maximum(urgency_pos, urgency_rate)
 
         # vertical component of thrust actually being produced
         prop_quat = robot.data.body_quat_w[:, prop_ids, :]

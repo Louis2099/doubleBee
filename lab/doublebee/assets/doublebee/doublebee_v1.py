@@ -100,7 +100,18 @@ DOUBLEBEE_CFG = ArticulationCfg(
             # length flat at 27-28 steps. Some acceleration trials also had the
             # frame support dragging, which can only have reduced the measured
             # figure, so 0.51 is conservative in both directions.
-            effort_limit=0.51,
+            effort_limit=0.72,  # 0.51 -> 0.72 on 2026-08-27, from MEASURED hardware.
+            #
+            # 0.51 was derived from a wheel acceleration of 43 rad/s^2, but that
+            # was the MEAN of the hardware measurement. The p90 is 61.6 rad/s^2
+            # (hw_v18, wheel_meas differentiated over five engaged segments), and
+            # the peaks are what matter for catching a fall.
+            #
+            # So sim's wheels were ~30% weaker than the real ones exactly at the
+            # moments that decide whether the robot stays up -- which is why the
+            # wheels look worse in sim than they do on hardware. 0.72 = 0.51 *
+            # 61.6/43 puts them at the measured peak. This makes sim MATCH
+            # reality, not become easier than it.
             velocity_limit=23.6,
             # WHEEL COMMAND DELAY. Kept at 1-3 steps (20-60 ms), which is the
             # serial round trip. Do NOT raise this to model the wheels' slow
