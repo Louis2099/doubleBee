@@ -36,8 +36,15 @@ MDP = os.path.normpath(os.path.join(
     "locomotion", "velocity", "mdp"))
 
 # Reference operating points, for annotation.
-PWM_HOVER = 1335.0      # BB_HOV_DC on the real robot
-PWM_SIM_MAX = 1334.0    # sim ceiling after the propeller action scale 187.5 -> 320
+#
+# BB_HOV_DC = 1335 us is NOT aerial hover, despite the parameter name and the
+# "~hover-ish" comment in doublebee_dctrl.py. It gives 8.66 N per propeller =
+# 17.3 N total against a 31.57 N robot, i.e. T/W = 0.55. It is the DECOUPLED-MODE
+# HOLD throttle: enough thrust to partially unload the machine while the wheels
+# drive, leaving 45% of the weight on the tyres for traction. True hover needs
+# 1578 us. Both are drawn, because the gap between them IS the hybrid argument.
+PWM_HOLD = 1335.0       # BB_HOV_DC, decoupled-mode hold
+PWM_HOVER = 1578.0      # T = W, computed from the thrust fit
 WEIGHT_N = 31.57        # 3.2182 kg, measured
 
 
@@ -76,10 +83,16 @@ def main():
     })
     fig, ax = plt.subplots(2, 2, figsize=(7.0, 4.6))
 
-    def mark(a_):
-        a_.axvline(PWM_HOVER, color="0.55", ls="--", lw=0.8, zorder=0)
-        a_.annotate("hover", xy=(PWM_HOVER, a_.get_ylim()[1]), xytext=(3, -9),
-                    textcoords="offset points", fontsize=6.5, color="0.35")
+    def mark(a_, labels=True):
+        a_.axvline(PWM_HOLD, color="0.55", ls="--", lw=0.8, zorder=0)
+        a_.axvline(PWM_HOVER, color="0.55", ls="-.", lw=0.8, zorder=0)
+        if labels:
+            a_.annotate("hold\n(T/W 0.55)", xy=(PWM_HOLD, a_.get_ylim()[1]),
+                        xytext=(-3, -16), textcoords="offset points",
+                        fontsize=6.2, color="0.35", ha="right")
+            a_.annotate("hover\n(T/W 1.0)", xy=(PWM_HOVER, a_.get_ylim()[1]),
+                        xytext=(3, -16), textcoords="offset points",
+                        fontsize=6.2, color="0.35")
 
     # (a) thrust ----------------------------------------------------------
     A = ax[0, 0]
@@ -150,10 +163,13 @@ def main():
           % np.abs(100 * (fit_P - P) / P).max())
     print("     efficiency %.4f N/W at 1100 -> %.4f N/W at 2000  (%.0f%% drop)"
           % (e_lo, e_hi, 100 * (1 - e_hi / e_lo)))
-    print("     hover (pwm %.0f): %.2f N/prop, %.1f W/prop, T/W %.2f"
-          % (PWM_HOVER, np.polyval(ct["coeffs"], PWM_HOVER),
-             np.polyval(cp["coeffs"], PWM_HOVER),
-             2 * np.polyval(ct["coeffs"], PWM_HOVER) / WEIGHT_N))
+    for lab, p in (("hold  (BB_HOV_DC)", PWM_HOLD), ("hover (T = W)", PWM_HOVER)):
+        print("     %-20s pwm %.0f: %5.2f N/prop, %6.1f W/prop, T/W %.2f, %.4f N/W"
+              % (lab, p, np.polyval(ct["coeffs"], p), np.polyval(cp["coeffs"], p),
+                 2 * np.polyval(ct["coeffs"], p) / WEIGHT_N,
+                 np.polyval(ct["coeffs"], p) / np.polyval(cp["coeffs"], p)))
+    ph, pv = np.polyval(cp["coeffs"], PWM_HOLD), np.polyval(cp["coeffs"], PWM_HOVER)
+    print("     holding costs %.0f%% of what hovering costs" % (100 * ph / pv))
 
 
 if __name__ == "__main__":
