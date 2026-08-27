@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import statistics
 import time
@@ -459,12 +460,30 @@ class OffPolicyRunner:
         #     self.alg.buffer.load_state_dict(loaded_dict["replay_buffer"])
 
         # In load(), if checkpoint predates log_alpha saving, set it low manually
-        if "log_alpha" in loaded_dict:
+        #
+        # DOUBLEBEE_RESET_ALPHA: set it (e.g. "-2.0") when resuming a CONVERGED
+        # checkpoint under a CHANGED REWARD. RUN 1 ended at alpha 0.0037, i.e.
+        # effectively deterministic. The terminal_goal_reached compensation only
+        # helps if the policy can still EXPLORE far enough to discover that
+        # finishing now outbids running out the clock -- at alpha 0.0037 it
+        # mostly re-executes what it already does and the reward change never
+        # gets sampled. -2.0 gives alpha 0.135, ~36x more exploration.
+        #
+        # Leave UNSET for a normal resume; restoring the saved alpha is correct
+        # when the reward is unchanged.
+        _alpha_override = os.environ.get("DOUBLEBEE_RESET_ALPHA")
+        if _alpha_override is not None:
+            with torch.no_grad():
+                self.alg.log_alpha.fill_(float(_alpha_override))
+            print(f"[resume] log_alpha FORCED to {float(_alpha_override):.3f} "
+                  f"(alpha={math.exp(float(_alpha_override)):.4f}) "
+                  f"via DOUBLEBEE_RESET_ALPHA")
+        elif "log_alpha" in loaded_dict:
             with torch.no_grad():
                 self.alg.log_alpha.copy_(loaded_dict["log_alpha"])
         else:
             with torch.no_grad():
-                self.alg.log_alpha.fill_(-2.0)  # exp(-2)=0.135, low exploration for fine-tuning       
+                self.alg.log_alpha.fill_(-2.0)  # exp(-2)=0.135, low exploration for fine-tuning
 
         return loaded_dict["infos"]
 
