@@ -21,6 +21,7 @@ from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.rewards import Re
 from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.stair_config import StairConfigCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.velocity_command import TerrainTargetDirectionCommandCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfg4D
+from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfg4DConstantThrust
 
 
 # Note: Using RewardsCfg from mdp/rewards.py instead of local DoubleBeeRewardsCfg
@@ -142,8 +143,13 @@ class DoubleBeeEventsCfg:
                 # losing taught it that falling is normal.
                 # 11 deg still needs 13 deg of servo to break even, so the servo
                 # still has a job, without conceding the episode at t=0.
-                "roll": (-0.2, 0.2),      # +/-11 deg
-                "pitch": (-0.2, 0.2),     # +/-11 deg
+                # Back to +/-3 deg on 2026-08-26. +/-20 converged fast to a
+                # non-balancing policy; +/-11 was untested and this run is
+                # already carrying enough new variables. The servo-behaviour
+                # argument for reset DR still stands, but it is not what the
+                # paper needs in the next 19 days.
+                "roll": (-0.05, 0.05),    # +/-3 deg
+                "pitch": (-0.05, 0.05),   # +/-3 deg
                 "yaw" :(0.0, 0.0),
                 # "yaw_noise": (0.0, 0.0),  # No yaw noise - perfect alignment toward target 
                 "yaw_noise": (-0.05, 0.05), # ±6° yaw noise
@@ -444,3 +450,23 @@ class DoubleBeeHybridStairCfg_PLAY(DoubleBeeHybridStairCfg):
 
 
 # python scripts/co_rl/train.py --task Isaac-Velocity-HybridStair-DoubleBee-v1-ppo --algo ppo --num_envs 4096 --headless --num_policy_stacks 2 --num_critic_stacks 2
+
+
+@configclass
+class DoubleBeeHybridStairConstantThrustCfg(DoubleBeeHybridStairCfg):
+    """FIXED-ALLOCATION BASELINE. Identical to the full task except the
+    propellers are pinned at a constant throttle.
+
+    This is the non-modulating comparison the energy claim needs, and the answer
+    to IROS R1's "how much better than a well-designed mode-switching
+    controller?". Preferred over a hand-tuned decoupled controller because there
+    is nothing to tune: wheels and servos are learned by the same algorithm, on
+    the same task, against the same reward. The only difference is that thrust
+    is held rather than modulated.
+
+    Held at hold_action = +1.0 -> 17.3 N total, T/W 0.55, which is what the
+    published decoupled controller uses (BB_HOV_DC = 1335 us). Sweep hold_action
+    for a fixed-allocation curve to plot against the learned Pareto front.
+    """
+
+    actions: ActionsCfg4DConstantThrust = ActionsCfg4DConstantThrust()

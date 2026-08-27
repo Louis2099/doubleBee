@@ -381,6 +381,58 @@ class CommonDiffJointVelocityActionCfg(mdp.JointVelocityActionCfg):
     diff_scale: float = 0.0
 
 
+
+class ConstantPropellerAction(TiedJointVelocityAction):
+    """Propellers held at a FIXED throttle, ignoring the policy's output.
+
+    Added 2026-08-26 as the non-modulating baseline. It replaces a hand-tuned
+    decoupled controller for the comparison IROS R1 asked for -- "how much better
+    is it than a well-designed mode-switching controller?" -- and it is a better
+    answer than a PID, because there is nothing to tune. Wheels and servos are
+    still learned by the same algorithm on the same task and reward, so nobody
+    can say the baseline was crippled.
+
+    The policy still emits a propeller action; it is simply discarded. The
+    dimension is kept so that the observation layout, the checkpoint shape and
+    the deployment action layout stay identical to the full policy, which makes
+    the two directly comparable and lets both run through db_inference.py
+    unchanged.
+
+    hold_action is in the same normalised units the propeller action uses, so
+    with propeller_vel scale/offset at 320 (see ActionsCfg4D):
+
+        -0.45   7.3 N   T/W 0.23   ~ the 7.17 N static-stability threshold
+        -0.05   9.6 N   T/W 0.31   ~ where the thrust reward saturates
+        +1.00  17.3 N   T/W 0.55   ~ BB_HOV_DC, what the published controller holds
+
+    Default +1.0 mirrors the published decoupled controller, which is the
+    fairest single point of comparison. Sweep it for a fixed-allocation curve to
+    put alongside the learned Pareto front.
+    """
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        self._hold = float(getattr(cfg, "hold_action", 1.0))
+
+    def process_actions(self, actions: torch.Tensor):
+        # Record what the policy asked for so the logs still show it, then
+        # overwrite. Keeping the raw actions faithful matters: the action-rate
+        # penalty and the `actions` observation term both read them.
+        self._raw_actions[:] = actions
+        held = torch.full_like(self._raw_actions, self._hold)
+        torch.mul(held, self._tied_scale, out=self._processed_actions)
+        self._processed_actions.add_(self._tied_offset)
+
+
+@configclass
+class ConstantPropellerActionCfg(TiedJointVelocityActionCfg):
+    class_type: type[ActionTerm] = ConstantPropellerAction
+
+    # Fixed propeller command in normalised units, [-1, 1]. See the class
+    # docstring for the thrust each value corresponds to.
+    hold_action: float = 1.0
+
+
 @configclass
 class ActionsCfg:
     """Action specifications for DoubleBee robot."""
@@ -645,8 +697,21 @@ class ActionsCfg4D:
         #
         # NOTE this changes action SEMANTICS, not dimensions: any checkpoint
         # trained at 187.5 will command 1.7x the thrust if run at 320. Retrain.
-        tied_scale={"leftPropeller": 320.0, "rightPropeller": -320.0},
-        tied_offset={"leftPropeller": 320.0, "rightPropeller": -320.0},
+        # BACK TO 187.5 on 2026-08-26 (was raised to 320 the same day).
+        #
+        # 320 lets sim reach the real robot's 17.3 N hold thrust, which is right
+        # for a fair fixed-allocation baseline. But observed control quality was
+        # worse with it: more thrust available is more thrust to destabilise
+        # with, and the policy has to learn to NOT use it.
+        #
+        # The trade this gives up is modulation RANGE. reward_vertical_thrust_
+        # support saturates at 131 rad/s either way, so:
+        #     scale 187.5 -> max 151 rad/s -> free-to-spin-down band 131..151 (narrow)
+        #     scale 320   -> max 257 rad/s -> band 131..257 (wide)
+        # A wider band is better for demonstrating energy modulation. If the
+        # modulation result looks thin, 250 is the middle option (max 201).
+        tied_scale={"leftPropeller": 187.5, "rightPropeller": -187.5},
+        tied_offset={"leftPropeller": 187.5, "rightPropeller": -187.5},
         use_default_offset=False,
         preserve_order=True,
     )
@@ -690,3 +755,25 @@ class ActionsCfgWheelsOnly4D(ActionsCfg4D):
 
     propeller_servo_pos = None
     propeller_vel = None
+
+
+@configclass
+class ActionsCfg4DConstantThrust(ActionsCfg4D):
+    """ActionsCfg4D with the propellers pinned. The fixed-allocation baseline.
+
+    Everything else -- wheel common/differential, tied servos, scales, the
+    observation layout -- is inherited unchanged, so the only difference from the
+    full policy is that thrust is not modulated. That is exactly the comparison
+    the energy claim needs.
+    """
+
+    propeller_vel = ConstantPropellerActionCfg(
+        asset_name="robot",
+        joint_names=["leftPropeller", "rightPropeller"],
+        scale=1.0,
+        tied_scale={"leftPropeller": 320.0, "rightPropeller": -320.0},
+        tied_offset={"leftPropeller": 320.0, "rightPropeller": -320.0},
+        hold_action=1.0,          # 17.3 N total, T/W 0.55 -- BB_HOV_DC
+        use_default_offset=False,
+        preserve_order=True,
+    )
