@@ -119,7 +119,23 @@ def reward_climb_progress(env) -> torch.Tensor:
 
     # --- rising: upward velocity of the body ---
     vz = robot.data.root_lin_vel_w[:, 2]
-    rising = torch.clamp(vz / 0.2, 0.0, 1.0)  # 0 to 1, saturates at 0.2 m/s up
+    # 2026-08-28: LOWER BOUND 0.0 -> -1.0. THIS TERM WAS A BOUNCE FARM.
+    #
+    # Clamped at 0 the up-stroke paid and the down-stroke was FREE, and the only
+    # gate is "is a step nearby" -- which stays true while hovering beside one.
+    # So oscillating vertically next to a step collected reward on every rise and
+    # lost nothing on every fall, without ever going anywhere.
+    #
+    # Observed in play on RUN 2: climbs well, but "goes up and down around the
+    # target rather than to it", with terrain_levels stuck at 0.02 and success at
+    # 0.12 -- it has the motor skill and was spending it farming. The play log
+    # backs the motor skill up: thrust z_frac 0.967 (min 0.951), servo controlled
+    # to -0.107..+0.253 rad, wheel tracking 0.45, lean settling, prop action
+    # modulating 0.013-0.85.
+    #
+    # Symmetric clamp makes a bounce net ~zero, so only NET height gain pays.
+    # Safe on a staircase, where legitimate motion is monotonically upward.
+    rising = torch.clamp(vz / 0.2, -1.0, 1.0)  # -1 to 1; a bounce now nets zero
 
     # --- step-ahead gate: is there terrain higher than the robot nearby (a step)? ---
     step_ahead = torch.ones(robot.num_instances, device=robot.device)
@@ -1693,9 +1709,41 @@ class RewardsCfg:
     # outright (db_inference.py: action[layout["servo"][0]] = act_units), so
     # props-up on the real robot is guaranteed by the PID hold, not by this
     # reward. These weights govern sim behaviour only.
+
+    # 2026-08-28: RESTORED TO FULL (5.0/3.0/6.0) FOR THE "full props + slow servo"
+    # RUN. This is the combination neither RUN 1 nor RUN 2 tested.
+    #
+    # The two runs each got one variable right and one wrong:
+    #                props   servo vel_limit   terrain_levels  success  play
+    #     RUN 1      full        10.0              1.51         0.356   servo THRASHING
+    #     RUN 2      halved       2.0              0.04         0.077   clean, but stuck
+    #
+    # Full prop rewards are what drive terrain progress -- RUN 1 promoted to 1.51
+    # with them, RUN 2 sat at 0.04 without. reward_props_upright buys WORLD-VERTICAL
+    # thrust, which is the restoring moment that makes this machine stable at all
+    # (T*L_prop*sin(th) against gravity's W*L_com*sin(th), L_prop/L_com = 4.4).
+    # Halving it on 2026-08-27 was my call, aimed at the circling, and it did NOT
+    # fix navigation: RUN 2 has the halved weights and WORSE terrain progress.
+    #
+    # servo velocity_limit stays at 2.0 (see doublebee_v1.py). RUN 1's 10.0 hands
+    # an untrained servo head 5x the authority and its play shows exactly that:
+    # thrust z_frac 0.827 with min 0.175, servo swinging -0.767..+0.791 rad,
+    # wheel tracking 0.14, lean diverging 6.8 -> 15.6 deg. RUN 2 at 2.0 reads
+    # z_frac 0.967 (min 0.951), servo -0.107..+0.253, tracking 0.45.
+    #
+    # MUST BE A FRESH RUN, not a resume: the point is to train the servo head
+    # against 2.0 from the start rather than inherit one shaped by 10.0.
+    #
+    # The circling/farming is attacked with POSITION-DEPENDENT terms instead of by
+    # weakening posture: terminal_goal_reached compensation (measured 1.0132 in
+    # RUN 1, second-largest term in the set) and the reward_climb_progress bounce
+    # clamp. Measured farming split in RUN 2 at iteration 4787:
+    #     position-independent 0.8626 : goal-directed 0.3226  = 2.7 : 1
+    # climb_progress was only 0.0136 of that, so the clamp alone was never going
+    # to be enough -- it is kept because it is correct, not because it is decisive.
     reward_props_upright = RewTerm(
         func=reward_props_upright,
-        weight=2.5,  # was 5.0
+        weight=5.0,
     )
 
     # Added 2026-08-21. Rewards props pointing up *and pushing*, which is what
@@ -1740,7 +1788,7 @@ class RewardsCfg:
     # ALREADY 0.35 in that run -- it is not part of the revert.
     reward_vertical_thrust_support = RewTerm(
         func=reward_vertical_thrust_support,
-        weight=1.5,  # was 3.0 -- see the position-independent note above
+        weight=3.0,  # full; see the note above reward_props_upright
         params={"target_frac": 0.35},
     )
 
@@ -1759,7 +1807,7 @@ class RewardsCfg:
     # far worse than the one it risks.
     reward_thrust_recovery_under_lean = RewTerm(
         func=reward_thrust_recovery_under_lean,
-        weight=3.0,  # was 6.0 -- see the position-independent note above
+        weight=6.0,  # full; see the note above reward_props_upright
         params={"lean_onset": 0.05},
     )
 
