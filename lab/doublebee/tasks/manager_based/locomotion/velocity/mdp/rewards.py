@@ -710,6 +710,60 @@ def penalize_facing_direction_mismatch(env) -> torch.Tensor:
 
     return -penalty
 
+def _step_ahead_gate(env, robot):
+    """0..1: is there a riser inside the height scan, scaled by its height?
+
+    Same construction reward_climb_progress uses -- median ray as the flat-ground
+    reference, max ray as the highest scanned point, saturating at a 4 cm step.
+    Returns zeros if the scanner is unavailable, so callers degrade to "no step".
+
+    NOTE THE RANGE LIMIT. The grid is resolution 0.07 / size 0.21, i.e. it reaches
+    only 0.105 m ahead of the base. Step HEIGHT is measurable; step DISTANCE is
+    effectively binary (in view or not). Do not try to schedule anything against
+    distance-to-step with this sensor.
+    """
+    try:
+        hs = env.scene["height_scanner"]
+        ray_z = torch.nan_to_num(
+            hs.data.ray_hits_w[..., 2], nan=0.0, posinf=0.0, neginf=0.0)
+        ground_z = ray_z.median(dim=1)[0]
+        max_ahead = ray_z.max(dim=1)[0]
+        return torch.clamp((max_ahead - ground_z) / 0.04, 0.0, 1.0)
+    except (KeyError, ValueError, IndexError):
+        return torch.zeros(robot.num_instances, device=robot.device)
+
+
+def _backward_lean_relief(env, robot, strength: float = 0.85):
+    """1 - relief multiplier for attitude penalties: free to lean BACK at a step.
+
+    Added 2026-08-28. Mounting a riser on a coaxial two-wheeler needs pitch
+    headroom: the wheels stop against the face, drive torque pitches the body
+    FORWARD by reaction, and starting from a backward lean is what keeps that
+    from ending nose-down. Measured, hw_v32: pitch ran -24 -> -35 -> -55 deg at
+    the riser and the robot went over its own wheels.
+
+    Both attitude penalties were SYMMETRIC -- penalize_not_upright explicitly
+    "in ANY direction (forward/back/roll)" with a 3.6 deg deadzone, and
+    penalize_tilt_angle on abs(projected_gravity[:, 1]) -- so the technique was
+    taxed exactly as hard as the failure it prevents. Measured at iteration 4787:
+        penalize_not_upright  -0.0348   penalize_rotation -0.0884
+        reward_climb_progress +0.0136
+    i.e. leaning cost 9x what climbing paid.
+
+    RELIEF, NOT REWARD, and that is deliberate. A "lean back near a step" BONUS
+    would be collectable by parking beside a step at an angle forever, and the
+    position-independent : goal-directed split is already 2.7 : 1. Removing a
+    fine adds no income to farm; it only stops charging for the manoeuvre.
+
+    ASYMMETRIC: forward lean at a step is the face-plant and stays fully taxed.
+    projected_gravity_b[:, 1] > 0 is pitched BACK (rewards.py elsewhere uses
+    pitch_signed = -projected_gravity_b[:, 1] as "positive when pitched FORWARD").
+    """
+    back = torch.clamp(robot.data.projected_gravity_b[:, 1], min=0.0)
+    back = torch.clamp(back / 0.34, 0.0, 1.0)          # saturates ~20 deg back
+    return 1.0 - strength * _step_ahead_gate(env, robot) * back
+
+
 def penalize_tilt_angle(env) -> torch.Tensor:
     robot = env.scene["robot"]
     projected_gravity = robot.data.projected_gravity_b
@@ -726,6 +780,11 @@ def penalize_tilt_angle(env) -> torch.Tensor:
         dist = torch.norm(robot_xy - target_xy, dim=1)
         near_target = torch.exp(-dist / 1.5)
         scaled_penalty = scaled_penalty * (1.0 - 0.85 * near_target)
+
+    # Free to lean BACK when a riser is in the scan -- see _backward_lean_relief.
+    # The existing near_target softening above keys on distance to the GOAL, which
+    # is not the same thing and does not fire while approaching a step mid-course.
+    scaled_penalty = scaled_penalty * _backward_lean_relief(env, robot)
 
     return scaled_penalty
 
@@ -1042,7 +1101,9 @@ def penalize_not_upright(env, upright_tol: float = 0.002) -> torch.Tensor:
     uprightness = -robot.data.projected_gravity_b[:, 2]  # 1=upright, <1 tilted
     tilt = torch.clamp(1.0 - uprightness, min=0.0)
     # deadzone: no penalty until tilt exceeds upright_tol (3.6 deg at 0.002 -- see docstring)
-    return -torch.clamp(tilt - upright_tol, min=0.0)
+    pen = -torch.clamp(tilt - upright_tol, min=0.0)
+    # Free to lean BACK when a riser is in the scan -- see _backward_lean_relief.
+    return pen * _backward_lean_relief(env, robot)
 
 def reward_alive_upright(env, tol: float = 0.5) -> torch.Tensor:
     """Constant per-step bonus while the robot is still standing.
