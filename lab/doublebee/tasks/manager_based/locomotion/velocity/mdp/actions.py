@@ -85,6 +85,20 @@ SERVO_POS_LIMIT_RAD = math.pi / 4  # 0.785 rad = 45 deg off vertical
 # testing ON ITS OWN with action_rate back at 0.1, so the two effects can be
 # told apart.
 #
+# 2026-08-28: DOING EXACTLY THAT. 47.0 -> 23.6.
+#   - penalize_action_rate IS back at 0.1, so objection (1) no longer applies.
+#   - the bang-bang DID survive: play at iteration 3693 shows target +/-40..53
+#     rad/s with actual +/-3..9 and track 0.02-0.20, sign reversing every few
+#     ticks. Half the action range is dead -- everything past |a| = 0.5 clips to
+#     the same 23.6, so the policy gets ZERO gradient there and never learns fine
+#     control. That is the "goes here and there instead of straight at the
+#     target" behaviour.
+#   - objection (2), "it may not even bind", is refuted BY HARDWARE. Deploying at
+#     --wheel_scale 0.5 (= 47 x 0.5 = 23.5 rad/s, this exact number) took wheel
+#     saturation 64% -> 0%, tracking 0.16 -> 0.41, and produced the first clean
+#     two-riser climb (hw_v33). effort_limit governs ACCELERATION; this governs
+#     the reachable SETPOINT, and they are not the same knob.
+#
 # The two wheel joints are MIRRORED in the USD, so driving forward requires
 # joint velocities of opposite sign. Every wheel action term therefore carries
 # +WHEEL_VEL_LIMIT on the left and -WHEEL_VEL_LIMIT on the right. Verified
@@ -92,7 +106,7 @@ SERVO_POS_LIMIT_RAD = math.pi / 4  # 0.785 rad = 45 deg off vertical
 # sign and obs_1 opposes the right action's, and the measured correlations were
 # +0.58/-0.71 (transfer_clamp), +0.13/-0.83 (transfer_auth_no_prop) and
 # +0.21/-0.38 (transfer_auth). Do NOT "simplify" this to a single sign.
-WHEEL_VEL_LIMIT_RAD_S = 47.0
+WHEEL_VEL_LIMIT_RAD_S = 23.6
 
 
 class TiedJointPositionAction(JointPositionAction):
