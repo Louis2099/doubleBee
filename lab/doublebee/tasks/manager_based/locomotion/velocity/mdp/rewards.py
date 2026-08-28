@@ -1600,14 +1600,35 @@ class RewardsCfg:
 
     # ========== Terminal Rewards ==========
     
-    # alive_weight/terminal_weight MUST mirror reward_alive_upright's weight and
-    # this term's weight. See terminal_reward_goal_reached for why: without the
-    # compensation, finishing the task costs the policy more than it gains, and a
-    # policy that balances well enough will farm the clock instead (measured,
-    # RUN 2: success 0.34 -> 0.00 purely from getting BETTER at balancing).
+    # alive_weight must equal the TOTAL POSITION-INDEPENDENT PER-STEP INCOME the
+    # policy forfeits by ending the episode -- NOT just reward_alive_upright's
+    # weight, which is what it was set to until 2026-08-28 and which under-sized
+    # it 4.4x.
+    #
+    # Measured at iteration 3693 (Episode_Reward x max_ep_len / weight / mean_ep_len):
+    #     reward_props_upright                 3.932 / step
+    #     reward_vertical_thrust_support       2.541
+    #     reward_alive_upright                 1.732
+    #     reward_thrust_recovery_under_lean    0.659
+    #     reward_prop_catch_when_falling       0.031
+    #                                          -----
+    #                                          8.894 / step forfeited
+    # against 2.0/step compensated, i.e. finishing LOST 6.89 for every step it
+    # saved. props_upright alone forfeits twice what the alive bonus does, and it
+    # was never counted. Consequence, same iteration: penalize_prolonged_no_progress
+    # -0.0761 at weight 0.5 = 152 stall-steps in a 214-step episode -- 71% of the
+    # time stalled, with 17% of episodes running the clock out.
+    #
+    # 9.0 sets the net cost of finishing to ~zero per step saved, so the base
+    # reward (reward_value 100 x weight 10 = 1000) is what actually decides, which
+    # is the whole point of the term.
+    #
+    # RE-MEASURE THIS IF THE PROP WEIGHTS CHANGE. It is a function of them: halve
+    # props_upright and this should come down with it, or finishing becomes
+    # over-paid and the policy will rush the goal and fall.
     terminal_goal_reached = RewTerm(
         func=terminal_reward_goal_reached,
-        params={"alive_weight": 2.0, "terminal_weight": 10.0},
+        params={"alive_weight": 9.0, "terminal_weight": 10.0},
         weight=10.0, # was 1.0
     )
     """Terminal reward for successfully reaching the goal.
