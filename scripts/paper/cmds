@@ -1,12 +1,82 @@
--  python db_inference.py \                                                                                              
-  --model_path ~/doublebee_PID_JAI/ckpts/latest/model_3500.pt \
-  --wheel_action_scale 47.0 --wheel_scale 0.7 \
+python3 ~/doublebee_PID_JAI/modified_mav_ros_src/src/mavros/mavros/srv/db_inference.py \
+  --model_path ~/doublebee_PID_JAI/ckpts/SAFE_run1_peak/model_3500.pt \
+  --wheel_action_scale 47.0 --wheel_scale 0.9 \
+  --wheel_lpf_alpha 1.0 \
+  --max_wheel_diff 0 \
   --sim_servo_limit_rad 0.7854 --servo_slew_rad_s 10.0 \
   --servo_obs_source lowpass \
   --servo_attitude_hold --servo_hold_sign -1.0 \
   --servo_hold_damping 0.15 --servo_hold_slew_rad_s 10.0 \
   --roboclaw_accel 13139 \
-  --contact 0.0 --base_z_offset -0.0315 \
-  --action_scale 1.0 --prop_scale 2.0 --servo_scale 1.0 \
+  --contact 0.0 \
+  --action_scale 1.0 --prop_scale 3.5 --servo_scale 2.7 \
   --prop_map sim_damped --prewarm --prop_min_frac 0.35 \
-  --log_path hw_v24.csv
+  --step -0.2558 9.8176 -2.1992 0.2076 0.0600 \
+  --step 0.1439 10.2172 -2.2156 0.1913 0.1100 \
+  --target 1.0034 -0.8414 \
+  --base_z_offset 0.06661
+
+
+# =============================================================================
+# 2026-08-27  WORKING HARDWARE RUN -- climbed 6 cm + 5 cm, two risers, straight.
+# This is the command to reproduce. Everything below was found the hard way.
+# =============================================================================
+#
+# MEASURED RESULT (hw_v33): 1.87 m traversed, 11 cm climbed in two risers,
+# net yaw 10.9 deg, mean 0.31 m/s, ZERO wheel saturation.
+#
+# WHY EACH NON-OBVIOUS FLAG:
+#   --wheel_scale         47.0 x scale is the rad/s at |action|=1, and the wheels
+#                         TOP OUT AT 23.6. At 1.4, 81% of ticks clipped, the
+#                         wheels reproduced 14% of the commanded variation, and
+#                         the robot tipped over its own wheels at the riser.
+#                         0.5 maps the action range exactly onto the actuator.
+#   --max_wheel_diff 0    ties the wheels. The policy's differential head carries
+#                         a large constant bias (action_1 mean +0.77 with the
+#                         goal 0.1 deg off the nose) and pivots forever.
+#   --servo_scale 1.0     the attitude hold computes the angle that puts thrust
+#                         vertical; servo_scale MULTIPLIES it. At 1.5 it commands
+#                         1.5x that, tilts PAST vertical, and oscillates -- 179
+#                         deg pk-pk of 180 available, i.e. saturated.
+#   --target              WITHOUT IT the command obs freezes at [0,1,0] = "goal
+#                         dead ahead" no matter which way the robot points, so
+#                         every turn is self-reinforcing. hw_v26: +438 deg net
+#                         yaw, 19% path efficiency.
+#   --step                without it height_scan reports FLAT GROUND and the
+#                         policy is blind to the obstacle. Generate with
+#                         make_step_map.py -- forward is body +Y = (-sin yaw,
+#                         cos yaw), NOT (cos yaw, sin yaw).
+#   --base_z_offset       RECALIBRATE THIS. The mocap rigid body definition
+#                         changed at some point: the old -0.0315 assumed a mocap
+#                         z of 0.1315, and the robot now reads 0.034 upright.
+#                         Stale value puts all 16 height_scan dims (40% of the
+#                         observation) out of distribution.
+#
+# STILL OPEN: it pendulums when it leans. The attitude hold is statically stable
+# at ANY lean by design, and the only damper is --servo_hold_damping (measured
+# working: servo leads pitch by 80 ms, correct sign). Measured pumping from the
+# wheels: corr(pitch_rate, a0) = +0.276, with the wheel command lagging pitch by
+# 160 ms -- --roboclaw_accel 13139 limits the wheels to 43 rad/s^2 against sim's
+# 74 median. Untested overnight: --roboclaw_accel 0 with --servo_hold_damping 0.30.
+#
+# Regenerate the map with the robot ON the start mark:
+#   python3 make_step_map.py --step_ft 4 0.06 --step_m 1.619 0.11 --goal_ft 8 --width 2.0
+
+python3 ~/doublebee_PID_JAI/modified_mav_ros_src/src/mavros/mavros/srv/db_inference.py \
+  --model_path ~/doublebee_PID_JAI/ckpts/SAFE_run1_peak/model_3500.pt \
+  --wheel_action_scale 47.0 --wheel_scale 0.9 \
+  --wheel_lpf_alpha 1.0 \
+  --max_wheel_diff 0 \
+  --sim_servo_limit_rad 0.7854 --servo_slew_rad_s 10.0 \
+  --servo_obs_source lowpass \
+  --servo_attitude_hold --servo_hold_sign -1.0 \
+  --servo_hold_damping 0.15 --servo_hold_slew_rad_s 10.0 \
+  --roboclaw_accel 13139 \
+  --contact 0.0 \
+  --action_scale 1.0 --prop_scale 3.5 --servo_scale 2.7 \
+  --prop_map sim_damped --prewarm --prop_min_frac 0.35 \
+  --step -0.2558 9.8176 -2.1992 0.2076 0.0600 \
+  --step 0.1439 10.2172 -2.2156 0.1913 0.1100 \
+  --target 1.0034 -0.8414 \
+  --base_z_offset 0.06661 \
+  --log_path hw_vNN.csv
