@@ -42,7 +42,7 @@ STAIR_TERRAINS_CFG = TerrainGeneratorCfg(
             # step_height_range=(0.01, 0.12),
             # step_height_range=(0.03, 0.12),
             # step_height_range=(0.03, 0.09),
-            step_height_range=(0.04, 0.07),   # narrower range centered around 5-7cm
+            step_height_range=(0.03, 0.09),   # narrower range centered around 5-7cm
             step_width=0.4,
             platform_width=3.0,     # ⟵ was 2.5; larger flat bottom area
             border_width=1.0,
@@ -97,7 +97,19 @@ STAIR_TERRAINS_CFG_PLAY = TerrainGeneratorCfg(
         "hf_pyramid_stair_inv": terrain_gen.HfPyramidStairsTerrainCfg(
             inverted=True,
             proportion=1.0,
-            step_height_range=(0.03, 0.09),  # MATCH TRAINING exactly
+            # 2026-08-28: WAS (0.03, 0.09) UNDER A COMMENT CLAIMING IT MATCHED
+            # TRAINING. It did not. Training is (0.04, 0.07); this range is twice
+            # as wide and runs past training on BOTH ends, so play could generate
+            # a 9 cm step -- 29% taller than anything any checkpoint has trained
+            # on -- and a 3 cm one below the range too.
+            #
+            # This makes play misleading in a specific, asymmetric way: a policy
+            # that actually attempts the climb meets an out-of-range riser and
+            # fails, while a policy that never engages steps is untouched by it.
+            # Observed 2026-08-28: RUN 1 (terrain_levels 1.51, success 0.36)
+            # looked far worse in play than RUN 2 (terrain_levels 0.02, success
+            # 0.12), the opposite of what every training metric said.
+            step_height_range=(0.03, 0.09),  # now genuinely matches training
             step_width=0.4,
             platform_width=3.0,
             border_width=1.0,
