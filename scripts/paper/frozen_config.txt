@@ -1,0 +1,53 @@
+DOUBLEBEE FROZEN CONFIG  --  snapshot 2026-08-28
+Everything below is the baseline for the paper's Method tables and the
+ablation arms. Do not change these without re-running every arm.
+
+REWARD WEIGHTS
+  velocity_direction_alignment            0.2  
+  reach_terrain_target                    1.0  
+  propeller_efficiency                   0.01  
+  energy_consumption                     0.25  
+  penalize_facing_mismatch                0.5  
+  penalize_rotation                       1.0  
+  penalize_high_speed                     0.1  
+  terminal_goal_reached                  10.0  "alive_weight": 9.0, "terminal_weight": 10.0
+  terminal_propeller_collision            3.0  
+  terminal_robot_out_of_bounds            1.0  
+  action_smoothness                     0.005  
+  penalize_stalling_near_target           1.0  
+  penalize_time                           1.5  
+  penalize_thrust_pointing_down           3.0  
+  penalize_prolonged_no_progress          0.5  
+  penalize_not_upright                    4.5  
+  penalize_action_rate                    0.1  
+  penalize_cross_track_error              0.5  
+  reward_climb_progress                   2.0  
+  reward_forward_progress                 2.0  
+  reward_progress_to_target              10.0  
+  reward_stable_after_climb               2.0  
+  reward_thrust_up_at_step                5.0  
+  reward_props_upright                    5.0  
+  reward_vertical_thrust_support          3.0  "target_frac": 0.35
+  reward_thrust_recovery_under_lean       6.0  "lean_onset": 0.05
+  reward_prop_thrust_when_climbing        2.5  
+  reward_prop_catch_when_falling          0.3  
+  reward_alive_upright                    2.0  "tol": 0.5
+
+ACTION SCALES
+  WHEEL_VEL_LIMIT_RAD_S                23.6
+  SERVO_POS_LIMIT_RAD                  math.pi / 4
+  diff_scale                           4.0
+  propeller tied_scale                 320.0
+
+ACTUATOR LIMITS
+  wheels                 effort_limit=0.51  velocity_limit=23.6
+  propeller_servos       effort_limit=5.0
+  propellers             
+
+TERRAIN
+  num_rows               5
+  num_cols               5
+  size                   (10.0
+  border_width           2.0
+  step_height_range      (0.03, 0.09)
+  step_width             0.4
