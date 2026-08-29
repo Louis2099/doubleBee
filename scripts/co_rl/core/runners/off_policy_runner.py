@@ -288,6 +288,7 @@ class OffPolicyRunner:
         self.save(os.path.join(self.log_dir, f"model_{self.current_learning_iteration}.pt"))
 
     def log(self, locs: dict, width: int = 80, pad: int = 35):
+        _t_log0 = time.time()
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
         self.tot_time += locs["collection_time"] + locs["learn_time"]
         iteration_time = locs["collection_time"] + locs["learn_time"]
@@ -374,6 +375,8 @@ class OffPolicyRunner:
                     self.writer.add_scalar("Episode/" + key, value, locs["it"])
                     ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
 
+        _t_log1 = time.time()   # end of the ep_infos aggregation block
+
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs["collection_time"] + locs["learn_time"]))
 
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
@@ -433,6 +436,9 @@ class OffPolicyRunner:
             # the run is bound by something outside the training loop.
             f"""{'Wall time:':>{pad}} {getattr(self, '_iter_wall', 0.0):.2f}s"""
             f"""  (untimed: {max(0.0, getattr(self, '_iter_wall', 0.0) - iteration_time):.2f}s)\n"""
+            f"""{'log() breakdown:':>{pad}} ep_infos {(_t_log1 - _t_log0):.2f}s"""
+            f"""  keys {len(locs['ep_infos'][0]) if locs['ep_infos'] else 0}"""
+            f"""  entries {len(locs['ep_infos'])}\n"""
             f"""{'Total time:':>{pad}} {self.tot_time:.2f}s\n"""
             f"""{'ETA:':>{pad}} {self.tot_time / (locs['it'] + 1) * (
                                locs['num_learning_iterations'] - locs['it']):.1f}s\n"""
