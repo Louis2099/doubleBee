@@ -264,12 +264,16 @@ class ManagerBasedConstraintRLEnv(ManagerBasedEnv, gym.Env):
             if self._debug_reset_counter % 10 == 0:  # Log every 10th reset
                 # 2026-08-26: gated -- .tolist() syncs the GPU on every reset.
                 # Set DOUBLEBEE_DEBUG_RESET=1 to restore.
+                # 2026-08-29: ALL FOUR now gated, not just the first. Each
+                # .tolist() forces a GPU->CPU sync and stalls the pipeline; with
+                # short episodes the reset path runs constantly, which is why the
+                # A100 sat at 3% utilisation while training crawled.
                 if __import__("os").environ.get("DOUBLEBEE_DEBUG_RESET"):
                     print(f"[DEBUG _reset_idx] Resetting {len(reset_env_ids)} envs: {reset_env_ids.tolist()}")
-                print(f"  episode_length_buf: {self.episode_length_buf[reset_env_ids].tolist()}")
-                print(f"  max_episode_length: {self.max_episode_length}")
-                print(f"  time_outs: {self.reset_time_outs[reset_env_ids].tolist()}")
-                print(f"  delta (early termination): {self.reset_delta[reset_env_ids].tolist()}")
+                    print(f"  episode_length_buf: {self.episode_length_buf[reset_env_ids].tolist()}")
+                    print(f"  max_episode_length: {self.max_episode_length}")
+                    print(f"  time_outs: {self.reset_time_outs[reset_env_ids].tolist()}")
+                    print(f"  delta (early termination): {self.reset_delta[reset_env_ids].tolist()}")
             # trigger recorder terms for pre-reset calls
             self.recorder_manager.record_pre_reset(reset_env_ids)
 
