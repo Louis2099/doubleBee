@@ -30,3 +30,37 @@ Do #2 with data you already have. Point me at one FCU log alongside its hw_*.csv
 
 The thrust and power models are degree-4 fits to 11 bench measurements spanning 1000–2000 µs, with calibration RMSE 0.0039 N and 1.65 W (0.013% and 0.148% of range). Propeller efficiency falls 66% across this range, from 0.087 N/W at 1100 µs to 0.029 N/W at 2000 µs; holding at T/W 0.55 costs 41% of the power required to hover.
 
+---
+
+The paper's title term is a rounding error in the reward. Your instinct is correct, and you need to know this before you write, not after a reviewer finds it.
+
+Run the ablation — but as a sweep, not a binary
+If you run only w_E = 0 vs 0.25, I'd predict almost no difference, and then you've spent 5 hours learning that 0.25 does nothing. That's a null result about a weight, not about energy-awareness.
+
+The penalty is exp(-E/20) - 1, currently operating at f = -0.248/step — that's in the responsive part of the curve, not saturated. So the term is sensitive to energy; it's just weighted into irrelevance. Sweep until it bites:
+
+
+w_E ∈ {0.0, 0.25, 1.0, 4.0}
+At 4.0 it contributes ≈ −0.21, comparable to penalize_rotation — that's where it can actually compete. Four runs, parallelizable, ~2.5 h each.
+
+That converts an ablation into a contribution. "We penalize energy" is a claim; "here is the measured success-vs-energy Pareto front, and here is where we chose to operate" is a result. It also answers R4's reward-sensitivity complaint directly.
+
+---
+
+The stronger energy experiment is already registered
+
+Isaac-Velocity-HybridStair-DoubleBee-ConstThrust-v1-ppo
+Same policy, same task, thrust pinned instead of modulated. If the modulating policy uses less energy at equal success, modulation earns its keep — and that's the non-trivial comparison. R1's objection was that "4× better than propeller-only" is trivially true (flying the whole way is obviously expensive). Constant-thrust hybrid is the baseline that isn't a strawman.
+
+This one is worth more than the sweep, because it isolates modulation from reward weighting.
+
+On contributions — the honest read
+Your problem isn't a missing idea. It's missing evidence, and you just fixed the biggest piece of it.
+
+Go back through the reviews: C1 baselines, C2 trial count, C3 "unable to maintain stable balance," C5 no validation. Not one reviewer questioned the novelty. R4 watched your video and saw a robot that couldn't balance — that's what sank it. Two days ago that robot climbed 11 cm over two risers and drove 1.87 m. That single fact moves you further than any reframing.
+
+What you can defensibly claim:
+
+A learned policy coordinating wheels and propellers on a propeller-assisted balancing robot, where the platform's own prior work (Cao et al.) used a hand-designed decoupled controller. Learned vs hand-designed on the same machine — and you have that baseline implemented.
+A validated actuator/energy model — thrust RMSE 0.0039 N (0.013% of range), power RMSE 1.65 W, against bench data.
+A measured energy trade-off — if the sweep produces a front.

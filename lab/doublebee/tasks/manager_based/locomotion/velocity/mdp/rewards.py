@@ -374,7 +374,16 @@ def reward_progress_to_target(env):
     if not hasattr(env, "_pd") or env._pd.shape != dist.shape:
         env._pd = dist.clone(); return torch.zeros_like(dist)
     prog = env._pd - dist; env._pd = dist.clone()
-    return torch.clamp(prog, min=0.0) * 10.0
+    # 2026-08-29: LOWER BOUND 0.0 -> SYMMETRIC. THIS WAS A SHUTTLE FARM.
+    #
+    # Floored at zero, closing on the goal paid and retreating was FREE, so
+    # advancing 10 cm and falling back 10 cm collected twice and cost nothing.
+    # At weight 10.0 this is the largest task term, which made shuttling the
+    # single most profitable thing the policy could do near a target. Observed
+    # as the robot going "backwards, or around the goal" instead of finishing.
+    # The +/-0.1 m/step clamp is 5 m/s and is never reached legitimately; it
+    # only guards against teleport-scale jumps at reset.
+    return torch.clamp(prog, -0.1, 0.1) * 10.0
 
 def reach_terrain_target(env) -> torch.Tensor:
     """Reward for reaching terrain target positions.
@@ -1208,6 +1217,34 @@ def penalize_action_rate(env) -> torch.Tensor:
     env._prev_action = env.action_manager.action.clone()
     return -rate
 
+
+def _not_stalled(env, robot, window: int = 100, floor: float = 0.15):
+    """1.0 while making progress, decaying to `floor` once stalled `window` steps.
+
+    Added 2026-08-29 to stop posture rewards being farmable while stationary.
+    reward_props_upright and reward_vertical_thrust_support are functions of
+    attitude and thrust only, so they pay identically whether the robot is
+    climbing or parked. Measured at iteration 5710 they were 5.63 and 3.47 per
+    step of the 11.84 total position-independent income, against 9.0 compensated
+    by terminal_reward_goal_reached -- so finishing still lost 2.84 per step
+    saved, and 58% of episodes ran out the clock.
+
+    The gap also self-inflates: props_upright grew 0.84 -> 2.36 as the policy got
+    BETTER at holding thrust vertical (z_frac 0.944 -> 0.981), so a fixed
+    compensation falls further behind the better the run goes. Gating the source
+    is stable where chasing it with lambda is not.
+
+    Reuses the counter maintained by penalize_prolonged_no_progress, so the
+    definition of "stalled" is identical to the one already penalized. Ramped
+    rather than binary to avoid a cliff in the value function, and floored at
+    0.15 because holding thrust vertical still has value while recovering.
+    """
+    c = getattr(env, "_stall_counter", None)
+    if c is None or c.shape[0] != robot.num_instances:
+        return 1.0
+    return torch.clamp(1.0 - c / float(window), min=floor, max=1.0)
+
+
 def reward_props_upright(env) -> torch.Tensor:
     """Small reward for props pointing upward at any time — not just at steps.
     Encourages the policy to keep props in an upright position generally."""
@@ -1246,7 +1283,9 @@ def reward_props_upright(env) -> torch.Tensor:
         spin = torch.clamp(
             robot.data.joint_vel[:, [lpj, rpj]].abs().mean(dim=1) / 120.0, 0.0, 1.0
         )
-        return (z_frac ** 2) * (0.25 + 0.75 * spin)
+        # Gated on progress: posture pays while the robot is getting somewhere,
+        # not while parked. See _not_stalled().
+        return (z_frac ** 2) * (0.25 + 0.75 * spin) * _not_stalled(env, robot)
     except (ValueError, IndexError):
         return torch.zeros(robot.num_instances, device=robot.device)
 
@@ -1306,7 +1345,9 @@ def reward_vertical_thrust_support(env, target_frac: float = 0.7) -> torch.Tenso
         vert = (mag * torch.clamp(thrust_dir_w[:, :, 2], 0.0, 1.0)).sum(dim=1) * 0.5
 
         # saturating reward: climbs to target_frac, flat beyond it
-        return torch.clamp(vert / target_frac, 0.0, 1.0)
+        # Gated on progress: posture pays while the robot is getting somewhere,
+        # not while parked. See _not_stalled().
+        return torch.clamp(vert / target_frac, 0.0, 1.0) * _not_stalled(env, robot)
     except (ValueError, IndexError):
         return torch.zeros(robot.num_instances, device=robot.device)
 

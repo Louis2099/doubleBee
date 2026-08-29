@@ -596,7 +596,16 @@ class ActionsCfg4D:
         joint_names=["leftWheel", "rightWheel"],
         scale=WHEEL_VEL_LIMIT_RAD_S,                    # must stay a float (CUDA)
         common_sign={"leftWheel": 1.0, "rightWheel": -1.0},
-        diff_scale=8.0,
+        # 8.0 -> 4.0 on 2026-08-28, to hold the steering:translation ratio fixed
+        # after WHEEL_VEL_LIMIT_RAD_S went 47.0 -> 23.6. diff_scale is absolute
+        # rad/s, so halving `scale` alone doubled the relative yaw authority:
+        #     before  47.0 : 8.0 = 5.9 : 1
+        #     after   23.6 : 8.0 = 2.95 : 1   <- unintended
+        #     now     23.6 : 4.0 = 5.9 : 1    <- original ratio restored
+        # The class docstring's "diff_scale is deliberately much smaller than
+        # scale" only holds at the original ratio; steering is a trim and must
+        # not be able to contest the balance loop.
+        diff_scale=4.0,
         use_default_offset=False,
         preserve_order=True,
     )
