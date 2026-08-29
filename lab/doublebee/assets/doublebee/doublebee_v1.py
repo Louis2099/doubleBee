@@ -211,9 +211,26 @@ DOUBLEBEE_CFG = ArticulationCfg(
             #
             # DO NOT re-raise this on a RESUMED checkpoint. It is only safe from
             # a FRESH run, where the servo head is trained against the real speed
-            # from the start. Left here as the first thing to try when there is
-            # time for a from-scratch run.
-            velocity_limit=2.0,
+            # from the start.
+            #
+            # 2026-08-29: RAISED TO 10.0 FOR A FRESH RUN. The 2026-08-27 failure
+            # above was a RESUME and was confounded -- alpha was reset 0.0026 ->
+            # 0.135 in the same change -- so a fresh run against 10.0 has never
+            # been tested. 10.0 is the measured hardware rate (86 deg in ~0.15 s);
+            # at 2.0 the servo needs 393 ms to sweep its 45 deg working range
+            # against a 119 ms fall constant, so it cannot be an attitude actuator
+            # and the policy learns to use it as a slow trim.
+            #
+            # WHAT THIS BUYS. At deployment --servo_attitude_hold currently
+            # OVERWRITES the policy's servo output because the policy cannot use
+            # it. If the servo head trains against the real rate, that hold may
+            # become unnecessary -- which is what makes "a single policy commands
+            # all three actuator groups" true rather than aspirational.
+            #
+            # TELL at ~1500 iterations: [SERVOLOOP] lag1_ac rising off ~0.02
+            # toward a coherent control signal, and [SERVOASYM] showing
+            # comparable correlation in both lean directions.
+            velocity_limit=10.0,
             min_delay=2, # guessed, in sim steps at 0.02s = 40-100ms lag
             max_delay=5, # guessed
             stiffness={
