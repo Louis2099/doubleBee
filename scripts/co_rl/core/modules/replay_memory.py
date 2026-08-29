@@ -31,8 +31,23 @@ class ReplayMemory:
             self.position = self.position + self.num_envs
             assert self.position < self.capacity
         else:
-            for i in range(self.num_envs):
-                self.push(states[i], actions[i], rewards[i], next_states[i], dones[i])
+            # 2026-08-29: WAS A PYTHON LOOP OVER num_envs.
+            #
+            # push_all runs once per environment step, so with capacity 1e6 and
+            # 1024 envs the buffer wraps roughly every 41 iterations, and each
+            # wrap ran 1024 Python iterations x 5 tensor assignments = 5120
+            # separate GPU writes. Vectorised to two slice writes per buffer.
+            n = self.num_envs
+            first = self.capacity - self.position
+            second = n - first
+            for buf, src_t in ((self.state_buffer, states), (self.action_buffer, actions),
+                               (self.reward_buffer, rewards), (self.next_state_buffer, next_states),
+                               (self.done_buffer, dones)):
+                buf[self.position : self.capacity] = src_t[:first]
+                if second > 0:
+                    buf[0 : second] = src_t[first : n]
+            self.size = self.capacity
+            self.position = second % self.capacity
 
     def push(self, state, action, reward, next_state, done):
         self.size = min(self.size + 1, self.capacity)
