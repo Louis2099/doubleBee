@@ -264,6 +264,13 @@ class OffPolicyRunner:
 
             stop = time.time()
             learn_time = stop - start
+            # 2026-08-29: wall-clock per iteration, so the time spent OUTSIDE
+            # collection+learning (logging, checkpoint saves, tensorboard flush)
+            # is visible. "Iteration time" only ever counted collect+learn, which
+            # is why the printed rate disagreed with the wall clock.
+            _wall_now = time.time()
+            self._iter_wall = _wall_now - getattr(self, "_iter_wall_prev", _wall_now)
+            self._iter_wall_prev = _wall_now
             self.current_learning_iteration = it
             if self.log_dir is not None:
                 self.log(locals())
@@ -421,6 +428,11 @@ class OffPolicyRunner:
             f"""{'-' * width}\n"""
             f"""{'Total timesteps:':>{pad}} {self.tot_timesteps}\n"""
             f"""{'Iteration time:':>{pad}} {iteration_time:.2f}s\n"""
+            # WALL time includes logging, checkpoint saves and tensorboard flush,
+            # none of which are in collection+learning. If wall >> iteration time,
+            # the run is bound by something outside the training loop.
+            f"""{'Wall time:':>{pad}} {getattr(self, '_iter_wall', 0.0):.2f}s"""
+            f"""  (untimed: {max(0.0, getattr(self, '_iter_wall', 0.0) - iteration_time):.2f}s)\n"""
             f"""{'Total time:':>{pad}} {self.tot_time:.2f}s\n"""
             f"""{'ETA:':>{pad}} {self.tot_time / (locs['it'] + 1) * (
                                locs['num_learning_iterations'] - locs['it']):.1f}s\n"""
@@ -436,7 +448,17 @@ class OffPolicyRunner:
             "critic_optimizer_state_dict": self.alg.critic_optimizer.state_dict(),
             "iter": self.current_learning_iteration,
             "total_steps": self.total_steps,
-            "replay_buffer": self.alg.buffer.state_dict(),
+            # 2026-08-29: REPLAY BUFFER NO LONGER SAVED.
+            #
+            # It is 344 MB of the 361 MB checkpoint (1e6 x 40 states + 1e6 x 40
+            # next_states + action/reward/done), it is copied off the GPU and
+            # written to disk every save_interval=100 iterations, and load()
+            # NEVER READS IT BACK (see the commented-out block in load()).
+            # Over a 3500-iteration run that is 12 GB written for nothing, on
+            # the critical path and outside the collection/learning timers.
+            # Set DOUBLEBEE_SAVE_BUFFER=1 if a resume ever needs to restore it.
+            **({"replay_buffer": self.alg.buffer.state_dict()}
+               if os.environ.get("DOUBLEBEE_SAVE_BUFFER") else {}),
             "log_alpha": self.alg.log_alpha.detach(),
             "infos": infos,
         }
