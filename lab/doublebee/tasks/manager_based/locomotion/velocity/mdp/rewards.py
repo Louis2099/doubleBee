@@ -1245,6 +1245,38 @@ def _not_stalled(env, robot, window: int = 100, floor: float = 0.15):
     return torch.clamp(1.0 - c / float(window), min=floor, max=1.0)
 
 
+def penalize_yaw_spin(env, deadband: float = 1.5, scale: float = 1.5) -> torch.Tensor:
+    """Charge for SUSTAINED yaw rate above a deadband. Added 2026-09-01.
+
+    Closes the degenerate solution PPO found: tip onto one wheel and pivot.
+    Measured in play at iteration 727 -- left wheel 0.108 m off the ground
+    (leftWheel z = -0.235 against rightWheel z = -0.344 on FLAT terrain), body
+    upright at lean 1.7 deg, ang_vel_b[z] sustained at -2.0 to -2.5 rad/s, and
+    the base position static.
+
+    With one wheel airborne the surviving wheel pivots the robot, so a perfectly
+    symmetric wheel command still produces yaw. That is why zeroing the
+    differential (diff_scale = 0, the deployment configuration) does NOT stop it.
+
+    It was profitable because nothing in 30 reward terms charged for yaw.
+    Measured per normalised step while spinning:
+        collected  +0.2118  (alive 0.103, props_upright 0.031, vert 0.019,
+                             recovery 0.037, stable_after_climb 0.022)
+        charged    -0.1214
+        NET        +0.0904  -- indefinitely repeatable, no translation, no risk.
+
+    DEADBAND. The differential can legitimately produce
+        yaw = 2*k_diff*r_wheel/w_track = 8.0*0.09/0.30 = 2.4 rad/s
+    at full command, so 1.5 leaves ~62% of steering authority uncharged and bills
+    only sustained rotation. Ramped rather than binary to avoid a value cliff.
+
+    Returns [-1, 0].
+    """
+    robot = env.scene["robot"]
+    yaw_rate = robot.data.root_ang_vel_b[:, 2].abs()
+    return -torch.clamp((yaw_rate - deadband) / scale, 0.0, 1.0)
+
+
 def reward_props_upright(env) -> torch.Tensor:
     """Small reward for props pointing upward at any time — not just at steps.
     Encourages the policy to keep props in an upright position generally."""
@@ -1726,6 +1758,16 @@ class RewardsCfg:
         func=penalize_prolonged_no_progress,
         weight=0.5,
     )
+
+    # 2026-09-01. Sized to make the one-wheel pivot unprofitable rather than
+    # merely discouraged: spinning netted +0.0904/step, and at weight 4.0 a
+    # sustained 2.3 rad/s spin costs ~-0.114, taking the net to -0.024.
+    penalize_yaw_spin = RewTerm(
+        func=penalize_yaw_spin,
+        weight=4.0,
+        params={"deadband": 1.5, "scale": 1.5},
+    )
+
 
     penalize_not_upright = RewTerm(
         func=penalize_not_upright,
