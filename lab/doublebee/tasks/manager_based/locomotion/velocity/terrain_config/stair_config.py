@@ -80,8 +80,24 @@ STAIR_TERRAINS_CFG = TerrainGeneratorCfg(
                     # 0.5-1.2 m is 1-3 risers at step_width 0.4, reachable inside
                     # a 1-2 s episode, so the goal becomes something the policy
                     # can actually experience and bootstrap from.
-                    y_range=(0.5, 1.2),
-                    z_range=(0.03, 0.20),
+                    # y spans the flat platform AND the first risers, and z
+                    # starts at 0 so both are valid patches. With
+                    # platform_width = 3.0 the flat centre runs to 1.5 m, so:
+                    #     y 0.5-1.5  ->  flat, z = 0        REACHABLE TODAY
+                    #     y 1.5-2.0  ->  first risers, z = 0.03-0.18
+                    # z_range starting at 0.03 with y capped inside the platform
+                    # is what raised "Failed to find valid patches": no point
+                    # within 1.2 m is 3 cm above the ground.
+                    #
+                    # This is a sampling-level curriculum. Episodes currently
+                    # last 35-55 steps (~1 s) and cover ~0.5 m, so the near flat
+                    # targets are the only ones the policy can reach at all --
+                    # and reaching ANY target is what finally samples
+                    # terminal_goal_reached, which has been 0.0000 in every run.
+                    # The elevated targets stay in the distribution so climbing
+                    # is still what the far half of the range demands.
+                    y_range=(0.5, 2.0),
+                    z_range=(0.0, 0.20),
                     max_height_diff=0.25,
                 ),
             },
@@ -139,8 +155,19 @@ STAIR_TERRAINS_CFG_PLAY = TerrainGeneratorCfg(
                     num_patches=5,
                     patch_radius=0.1,
                     x_range=(-1.0, 1.0),
-                    y_range=(1.5, 3.2),   # match training
-                    z_range=(0.03, 0.20), # match training
+                    # 2026-08-31: kept in lockstep with training, which moved
+                    # to (0.5, 2.0)/(0.0, 0.20). The flat centre runs to 1.5 m
+                    # (platform_width 3.0), so y 0.5-1.5 is flat ground and
+                    # y 1.5-2.0 is the first risers. z must start at 0 or the
+                    # flat half has no valid patch and the generator raises
+                    # "Failed to find valid patches".
+                    #
+                    # If you change either range here, change it in
+                    # STAIR_TERRAINS_CFG too. A play target the policy never
+                    # trained on makes play misleading in exactly the asymmetric
+                    # way documented on step_height_range above.
+                    y_range=(0.5, 2.0),   # match training
+                    z_range=(0.0, 0.20),  # match training
                     max_height_diff=0.25,
                 ),
             },
