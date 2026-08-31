@@ -1,0 +1,42 @@
+Six candidates. I'll rank by how much each one earns its half-column, and flag one you don't have yet that I think is the strongest.
+
+1. Actuator allocation vs. distance-to-riser — the figure you're missing
+Aggregate across all 15 trials: x-axis is distance to the riser (−0.8 m to +0.4 m), thrust on the left axis, wheel speed on the right, mean with a ±1σ band, vertical line at contact.
+
+If the policy ramps thrust before contact and decays it after, that curve is the entire paper in one plot — and crucially it's continuous, with no step change anywhere. That's your mode-free claim made visual rather than asserted. A mode-switched controller would show a discontinuity at a threshold; yours won't.
+
+Everything needed is already in your trial CSVs (pos_x/y, action_3, wheel_meas_*) plus the step position from make_step_map.py. It costs you nothing extra to collect.
+
+2. Fig. 1: composite + actuator strip
+Already designed. Result and claim in one image, and it answers R4's "the video shows a robot that can't balance" directly.
+
+3. Energy–success Pareto front
+One point per w_E ∈ {0, 0.25, 1, 2, 4}, success rate against energy per traverse, operating point marked. This is what justifies your title. If there's a knee, it's a great figure; if the front is flat, it's still a publishable finding and you report it honestly.
+
+4. Actuator identification, 4 panels — your most distinctive asset
+
+(a) thrust: bench points + degree-4 fit, RMSE 3.9e-3 N
+(b) wheel:  commanded vs achieved, with the 23.6 rad/s ceiling and the
+            saturated region shaded — this is the figure that explains
+            why wheel_scale 0.5 fixed hardware
+(c) servo:  sim 2.0 vs measured 10.0 rad/s, with tau = 119 ms marked
+(d) latency budget: sense -> policy -> actuator, against tau
+Almost every RL paper has a domain-randomisation table. Almost none shows measured actuator mismatches and their consequences. Panel (b) alone tells a story nobody else is telling, and (c) is the honest limitation that makes reviewers trust the rest.
+
+5. Hardware trials: per-trial strip + Clopper–Pearson CIs
+Policy vs decoupled baseline, N=15 each. Answers C1 and C2 in one figure. Show individual trials as dots, not just bars — R3 asked for statistics, and 15 visible points is more convincing than an error bar.
+
+6. Reward-hacking comparison
+Success rate over training under XY-only vs your four criteria, same policy. The gap between the curves is the inflation, and it turns a methodological claim into a measurement. Cheap — it's a re-scoring of data you already have.
+
+What I'd cut
+Plain training curves. Reward vs iteration is in every RL paper and carries almost no information. The exception is if you plot 3 seeds with bands, which R4 explicitly asked for (C5) — then it's answering a complaint rather than filling space.
+
+The "4× better than propeller-only" bar chart. R1 already called that trivially true. One table row, not a figure.
+
+Ordering, given 4 days
+Figures 1, 4, and 6 need no new training run — 4 and 6 use data you already have, and 1 comes free with the trials. Do those while the runs go. Figures 3 and 5 depend on the sweep and the trials respectively.
+
+If you want, I can write the plotting script for #1 now against hw_v34.csv so it's ready the moment the 15 trials land — it's the same data pipeline, just aggregated.
+
+(Separately: the Gmail, Calendar and Drive connectors still need authorising in your claude.ai connector settings before I can use them — not needed for any of this.)

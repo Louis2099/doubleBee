@@ -605,7 +605,21 @@ class ActionsCfg4D:
         # The class docstring's "diff_scale is deliberately much smaller than
         # scale" only holds at the original ratio; steering is a trim and must
         # not be able to contest the balance loop.
-        diff_scale=4.0,
+        #
+        # DOUBLEBEE_WHEEL_DIFF_SCALE overrides this at import time. Set it to 0
+        # to tie the wheels, which is how the policy is DEPLOYED:
+        # db_inference.py is run with --max_wheel_diff 0, so the differential is
+        # clamped to zero on hardware. Evaluating in simulation with a live
+        # differential therefore measures a configuration that never runs on the
+        # robot -- and the resulting spin-in-place is a pathology the deployment
+        # flag already suppresses (hw_v33: 1.87 m traversed, 10.9 deg net yaw,
+        # against the same checkpoint wandering in sim).
+        #
+        # Use 0 for play/evaluation to match deployment. If you ever train with
+        # 0, also zero penalize_cross_track_error -- with the wheels tied,
+        # lateral drift is uncorrectable and charging for it distorts the value
+        # function (that is why the differential was added in the first place).
+        diff_scale=float(__import__("os").environ.get("DOUBLEBEE_WHEEL_DIFF_SCALE", 4.0)),
         use_default_offset=False,
         preserve_order=True,
     )
