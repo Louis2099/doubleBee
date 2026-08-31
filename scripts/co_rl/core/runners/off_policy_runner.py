@@ -272,10 +272,15 @@ class OffPolicyRunner:
             self._iter_wall = _wall_now - getattr(self, "_iter_wall_prev", _wall_now)
             self._iter_wall_prev = _wall_now
             self.current_learning_iteration = it
+            _t_a = time.time()
             if self.log_dir is not None:
                 self.log(locals())
+            _t_b = time.time()
             if it % self.save_interval == 0:
                 self.save(os.path.join(self.log_dir, f"model_{it}.pt"))
+            _t_c = time.time()
+            self._t_log_call = _t_b - _t_a
+            self._t_save_call = _t_c - _t_b
             ep_infos.clear()
             if it == start_iter:
                 # obtain all the diff files
@@ -438,12 +443,18 @@ class OffPolicyRunner:
             f"""  (untimed: {max(0.0, getattr(self, '_iter_wall', 0.0) - iteration_time):.2f}s)\n"""
             f"""{'log() breakdown:':>{pad}} ep_infos {(_t_log1 - _t_log0):.2f}s"""
             f"""  keys {len(locs['ep_infos'][0]) if locs['ep_infos'] else 0}"""
-            f"""  entries {len(locs['ep_infos'])}\n"""
+            f"""  entries {len(locs['ep_infos'])}"""
+            f"""  | print {getattr(self,'_t_print',0.0):.2f}s"""
+            f"""  logcall {getattr(self,'_t_log_call',0.0):.2f}s"""
+            f"""  save {getattr(self,'_t_save_call',0.0):.2f}s\n"""
             f"""{'Total time:':>{pad}} {self.tot_time:.2f}s\n"""
             f"""{'ETA:':>{pad}} {self.tot_time / (locs['it'] + 1) * (
                                locs['num_learning_iterations'] - locs['it']):.1f}s\n"""
         )
+        _t_pr0 = time.time()
         print(log_string)
+        self._t_print = time.time() - _t_pr0
+        self._t_logtot = time.time() - _t_log0
 
     def save(self, path, infos=None):
         saved_dict = {

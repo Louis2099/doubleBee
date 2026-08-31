@@ -230,7 +230,27 @@ DOUBLEBEE_CFG = ArticulationCfg(
             # TELL at ~1500 iterations: [SERVOLOOP] lag1_ac rising off ~0.02
             # toward a coherent control signal, and [SERVOASYM] showing
             # comparable correlation in both lean directions.
-            velocity_limit=10.0,
+            #
+            # 2026-08-31: BACK TO 2.0. The fresh run at 10.0 FAILED. Over 999
+            # iterations (24M steps, 24k gradient steps) nothing moved:
+            #     mean episode length  37.8 -> 39.8   (+5%)
+            #     tilt count           27.3 -> 26.4   (unchanged)
+            #     success              0 of 634 trajectories
+            #     terrain_levels       0.0000, every env on the floor
+            #     alpha                0.96 -> 0.0043, exploration gone
+            # The robot still fell in 0.8 s at the end, exactly as at the start.
+            #
+            # The likely mechanism is the one the 2026-08-27 note predicted from
+            # the other direction: a servo 5x faster than the policy can command
+            # is destabilising BEFORE the servo head is trained, and the policy
+            # never gets far enough to train it. Raising this needs a run where
+            # something else is already holding the robot up -- e.g. curriculum
+            # from an easier task, or a warm start from a 2.0 checkpoint with the
+            # servo head reinitialised. It is not a drop-in change.
+            #
+            # 2.0 is the value in every run that ever produced a working
+            # checkpoint, including model_3500.
+            velocity_limit=2.0,
             min_delay=2, # guessed, in sim steps at 0.02s = 40-100ms lag
             max_delay=5, # guessed
             stiffness={
