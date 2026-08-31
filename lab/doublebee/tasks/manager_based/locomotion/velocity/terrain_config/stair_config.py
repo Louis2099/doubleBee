@@ -67,7 +67,20 @@ STAIR_TERRAINS_CFG = TerrainGeneratorCfg(
                     x_range=(-1.0, 1.0),  # narrow - same corridor as spawn
                     # y_range=(0.5, 4.0),   # wider — from close (0.5m) to far (4m)
                     # z_range=(0.0, 0.20),  # wider — from flat (0.0) to multi-step (0.20)# CHANGED: was (0.03, 0.20) — now includes flat-ground targets too
-                    y_range=(1.5, 3.2),
+                    # 2026-09-01: y 1.5-3.2 -> 0.5-1.2 m. THE GOAL WAS UNREACHABLE.
+                    #
+                    # Measured mean episode length across every run to date is
+                    # 35-55 steps = 0.7-1.1 s. At the ~0.5 m/s these policies
+                    # achieve, that covers ~0.5 m against a nearest goal of
+                    # 1.5 m. terminal_goal_reached is therefore 0.0000 in every
+                    # log, the curriculum cannot promote (it needs three
+                    # consecutive successes), and no amount of reward balancing
+                    # helps because the terminal reward is never SAMPLED.
+                    #
+                    # 0.5-1.2 m is 1-3 risers at step_width 0.4, reachable inside
+                    # a 1-2 s episode, so the goal becomes something the policy
+                    # can actually experience and bootstrap from.
+                    y_range=(0.5, 1.2),
                     z_range=(0.03, 0.20),
                     max_height_diff=0.25,
                 ),

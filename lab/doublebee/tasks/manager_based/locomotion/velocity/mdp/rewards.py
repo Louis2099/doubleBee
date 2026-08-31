@@ -1610,9 +1610,34 @@ class RewardsCfg:
     
     # ========== Target Reaching Rewards ==========
     
+    # 1.0 -> 5.0 on 2026-09-01. THE ONLY FORWARD TERM WITH A GRADIENT AT REST.
+    #
+    # Measured at PPO iteration 727, per normalised step:
+    #     going somewhere   +0.0123   (reach 0.0098, progress 0.0010,
+    #                                  forward 0.0011, alignment 0.0004)
+    #     standing there    +0.2118   (alive 0.103, recovery 0.037,
+    #                                  props_upright 0.031, ...)
+    #                        17 : 1 against moving
+    #
+    # Worse, three of those four forward terms are VELOCITY-DEPENDENT --
+    # progress_to_target is (prev_dist - dist), forward_progress and
+    # velocity_direction_alignment both scale with |v| -- so a stationary robot
+    # earns nothing from them and they cannot tell it to START. Only this term
+    # is a potential, exp(-d^2/scale^2), nonzero and sloping toward the goal
+    # regardless of current velocity.
+    #
+    # Its gradient is ~0.04 per 10 cm closer at weight 1.0; at 5.0 that is ~0.20,
+    # comparable to the entire posture income, so closing distance becomes the
+    # best available move rather than a rounding error.
+    #
+    # NOT HIGHER. This creates a position-DEPENDENT income near the goal that
+    # terminal_reward_goal_reached's lambda (sized to position-INDEPENDENT income)
+    # does not cover, so a large weight would invite parking just outside the
+    # success radius. At 5.0, sitting at d = 0.3 m earns ~4.9/step against a
+    # terminal advantage of 1000 + 9(T-t), which finishing still wins comfortably.
     reach_terrain_target = RewTerm(
         func=reach_terrain_target,
-        weight=1.0,
+        weight=5.0,
     )
     """Reward for reaching terrain target positions.
     Computes distance to nearest target patch from terrain.flat_patches['target'].
