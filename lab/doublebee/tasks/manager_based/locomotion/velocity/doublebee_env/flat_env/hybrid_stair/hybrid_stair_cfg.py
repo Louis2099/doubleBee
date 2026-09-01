@@ -22,6 +22,7 @@ from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.stair_
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.velocity_command import TerrainTargetDirectionCommandCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfg4D
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfg4DConstantThrust
+import os
 
 
 # Note: Using RewardsCfg from mdp/rewards.py instead of local DoubleBeeRewardsCfg
@@ -95,12 +96,27 @@ class DoubleBeeEventsCfg:
     #     },
     # )
 
-    # Domain randomization: thrust output ±20% per env per propeller (sampled at reset)
-    # sample_thrust_scale_dr = EventTerm(
-    #     func=aerodynamics.sample_thrust_scale_dr,
-    #     mode="reset",
-    #     params={"range_low": 0.8, "range_high": 1.2, "num_propellers": 2},
-    # )
+    # Domain randomization: thrust output +/-20% per env per propeller (at reset).
+    #
+    # 2026-09-01: was commented out, so EVERY run to date trained with a perfect
+    # thrust model. That is the single largest sim2real gap on this robot -- a
+    # whole hardware session went into prop_map / prop_scale / prop_min_frac
+    # precisely because the real thrust curve is not the modelled one.
+    #
+    # Gated on DOUBLEBEE_DR so the w_E ablation and the robustness run cannot
+    # contaminate each other: the ablation needs all five runs identical except
+    # w_E, and silently flipping DR under it would invalidate the table.
+    #   DOUBLEBEE_DR unset/0 -> no DR   (use for the w_E sweep)
+    #   DOUBLEBEE_DR=1       -> +/-20%  (use for the sim2real robustness run)
+    sample_thrust_scale_dr = (
+        EventTerm(
+            func=aerodynamics.sample_thrust_scale_dr,
+            mode="reset",
+            params={"range_low": 0.8, "range_high": 1.2, "num_propellers": 2},
+        )
+        if os.environ.get("DOUBLEBEE_DR", "0") not in ("0", "", "false", "False")
+        else None
+    )
 
     # NOTE: Reset/spawn is controlled here. Position is sampled from terrain "init_pos" flat patches.
     # - pose_range: roll, pitch, yaw in rad. Only orientation is randomized (position from terrain).

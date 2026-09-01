@@ -1,0 +1,1 @@
+ on a statically-unstable platform where episodes terminate on tilt within ~1 s and success is initially <1%, on-policy optimization has no advantage signal and its unregulated action-noise parameter diverges; off-policy replay with entropy-constrained exploration converges.
