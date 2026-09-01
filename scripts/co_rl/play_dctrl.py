@@ -324,10 +324,20 @@ def main():
         resume_path = os.path.abspath(os.path.expanduser(args_cli.checkpoint))
         if not os.path.isfile(resume_path):
             raise FileNotFoundError(f"--checkpoint not found: {resume_path}")
+    elif os.environ.get("DOUBLEBEE_SKIP_POLICY"):
+        # 2026-09-01: the decoupled/PID baseline never uses the policy -- every
+        # `policy(...)` call in the step loop is commented out and actions come
+        # from env._decoupled_ctrl. Loading a checkpoint at all is what produced
+        # both failures seen today:
+        #   * a 38-obs/6-action model auto-resolved into a 40/4 env, and
+        #   * model_3500 (TQC: actor_state_dict/critic_state_dict) handed to
+        #     OnPolicyRunner under --algo ppo, which wants model_state_dict.
+        # With DOUBLEBEE_SKIP_POLICY=1 no checkpoint is needed or read.
+        resume_path = None
     else:
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
-    log_dir = os.path.dirname(resume_path)
+    log_dir = os.path.dirname(resume_path) if resume_path else log_root_path
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
@@ -383,12 +393,18 @@ def main():
             runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
 
     # Load the checkpoint and verify it loaded successfully
-    try:
+    if resume_path is None:
+        print("[INFO] DOUBLEBEE_SKIP_POLICY set -- running the decoupled/PID "
+              "baseline with an UNTRAINED network. The policy is never queried; "
+              "actions come from env._decoupled_ctrl.", flush=True)
+        loaded_infos = None
+    else:
+      try:
         loaded_infos = runner.load(resume_path)
         print(f"[INFO] Model checkpoint loaded successfully from iteration {runner.current_learning_iteration}")
         if loaded_infos:
             print(f"[INFO] Checkpoint info: {loaded_infos}")
-    except Exception as e:
+      except Exception as e:
         print(f"[ERROR] Failed to load model checkpoint: {e}")
         print("[ERROR] The model may not be loaded correctly. Exiting.")
         raise
@@ -402,7 +418,8 @@ def main():
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     # export policy to onnx/jit
-    export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
+    export_model_dir = os.path.join(
+        os.path.dirname(resume_path) if resume_path else log_root_path, "exported")
 
     if is_off_policy:
         export_policy_as_jit(runner.alg, runner.obs_normalizer, path=export_model_dir, filename="policy.pt")
