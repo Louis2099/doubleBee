@@ -109,8 +109,22 @@ L_PROP_M = 0.44     # propeller height above the wheel axle
 T_MAX_PER_PROP_N = 18.28
 # Servo travel. actions.py: SERVO_POS_LIMIT_RAD = pi/4. NOT pi/2.
 SERVO_LIMIT_RAD = np.pi / 4          # 0.7854
-# Wheel torque ceiling, doublebee_v1.py effort_limit.
-WHEEL_TORQUE_LIMIT_NM = 0.51
+# Wheel command ceiling.
+#
+# 2026-09-01 CORRECTION. This was 0.51 (doublebee_v1.py effort_limit) on the
+# assumption that tau_w is a physical torque. It is not. play_dctrl.py does
+#     wheel_action_L = clip(out["tau_w1"] / 2.0, -1, 1)
+# so tau_w is a NORMALIZED command whose full scale is 2.0; the action is then
+# mapped to a wheel VELOCITY by WHEEL_VEL_LIMIT_RAD_S in actions.py. Clipping
+# at 0.51 therefore capped the wheel command at 0.51/2.0 = 26% of range --
+# observed as "tau_w=-0.51 action=[-0.26 ...]" with v never reaching v_des and
+# the robot unable to balance or drive. The original controller clipped at
+# +/-2.0, which is what let it go forward and climb.
+#
+# The real 0.51 N.m effort_limit is still enforced, by the actuator in the
+# simulator, which is where it belongs.
+WHEEL_CMD_LIMIT = float(os.environ.get("DOUBLEBEE_WHEEL_CMD_LIMIT", 2.0))
+WHEEL_TORQUE_LIMIT_NM = WHEEL_CMD_LIMIT   # kept: name used by describe()/reports
 # Robot weight, for reporting thrust as a fraction of weight.
 ROBOT_WEIGHT_N = 3.2182 * 9.81       # 31.57 N
 
