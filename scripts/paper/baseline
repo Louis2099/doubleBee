@@ -25,3 +25,29 @@ seeds            3 seeds on the baseline arm
 How to run it as a baseline: sweep theta_desired ∈ {0, −20, −40, −60, −80}° rather than picking one — IROS'26 only showed −80° climbing and 0° failing, and the sweep turns that anecdote into the controller's actual frontier. Log describe() beside every trial; it dumps mode, every gain, every limit, and whether any deviation was active. Set tuning_budget to how many gain sets you tried — "undertuned baseline" is the reviewer's default objection and a stated budget is the only answer.
 
 One thing the file enforces but the paper has to state: this baseline is blind, and the policy gets a 16-dim height scan. Don't let "sees the terrain vs doesn't" ride along as "learned vs classical."
+
+---
+
+Nothing changed by default. D as you ran it is untouched and reproducible.
+
+Change one thing at a time, in this order, keeping the run that works as your fallback:
+
+
+cd /home/airlab/doublebee_PID_JAI/doubleBee_isaac
+BASE="DOUBLEBEE_YAW_SIGN=-1 DOUBLEBEE_BASELINE=augmented DOUBLEBEE_EQ20=0 DOUBLEBEE_SKIP_POLICY=1"
+
+# E — kill the servo chatter (fixes the funky rotations)
+env $BASE DOUBLEBEE_KSIG_D=0.03 DOUBLEBEE_DLPF=0.15 \
+python3 scripts/co_rl/play_dctrl.py --task Isaac-Velocity-HybridStair-DoubleBee-Play-v1-ppo --algo ppo --num_envs 1
+
+# F — if E is good, also reduce the lean at steps (16 deg -> 11 deg)
+env $BASE DOUBLEBEE_KSIG_D=0.03 DOUBLEBEE_DLPF=0.15 DOUBLEBEE_LEAN_MAX=0.20 \
+python3 scripts/co_rl/play_dctrl.py --task Isaac-Velocity-HybridStair-DoubleBee-Play-v1-ppo --algo ppo --num_envs 1
+What to check in E: does sigma stop swinging ±30° step-to-step? If it goes smooth and the climb still works, keep it. If climbing gets worse, the chatter was doing useful work at the riser — go back to D and only run F.
+
+Don't touch Kt_p or Kv_d yet. v sitting at 0.5 against v_des=0.15 is downstream of the sigma dither pushing the robot forward; fix the chatter first and re-measure before deciding the speed loop needs anything.
+
+Write down what worked before you tune further. Right now the working config is:
+
+
+mode=augmented, EQ20=0, YAW_SIGN=-1, KYAW=0.15, LEAN_MAX=0.28

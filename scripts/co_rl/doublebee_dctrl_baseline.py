@@ -174,7 +174,15 @@ class DecoupledBaseline:
         # --- Eq. (22): servo PID bias on top of the -theta feedforward ---
         self.Ksig_p = 0.2
         self.Ksig_i = 0.02
-        self.Ksig_d = 0.08
+        # 2026-09-01: exposed, DEFAULT UNCHANGED at 0.08 so nothing that already
+        # works changes. But note Ksig_d/dt = 4.0, i.e. the servo D term has 20x
+        # the authority of Ksig_p = 0.2. With ~0.3 rad/s of step-to-step jitter
+        # on theta_dot that is +/-12 deg of sigma command from NOISE alone --
+        # seen directly as sigma swinging +22, +15, -13, +6, +34, +35 on
+        # consecutive steps. The servo (velocity_limit 2.0 rad/s) cannot follow
+        # that, so it dithers. Try DOUBLEBEE_KSIG_D=0.03 with DOUBLEBEE_DLPF=0.15
+        # -> ~2 deg of chatter.
+        self.Ksig_d = float(os.environ.get("DOUBLEBEE_KSIG_D", 0.08))
 
         # --- Eq. (23): wheel torque from desired velocity and steer rate ---
         self.Kv_d = 1.0
@@ -213,7 +221,7 @@ class DecoupledBaseline:
 
         # Derivative low-pass. Raw (e_k - e_{k-1})/dt on a 50 Hz mocap-derived
         # pitch rate is noisy enough to swamp Kt_d. 1.0 disables filtering.
-        self.d_lpf_alpha = 0.3
+        self.d_lpf_alpha = float(os.environ.get("DOUBLEBEE_DLPF", 0.3))
 
         # --- mode="augmented" only. NOT part of [7] Eq. (23). ---
         self.Kb_p = 5.0                       # wheel pitch feedback
