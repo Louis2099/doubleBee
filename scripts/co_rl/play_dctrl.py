@@ -313,8 +313,17 @@ def main():
         if not resume_path:
             print("[INFO] Unfortunately a pre-trained checkpoint is currently unavailable for this task.")
             return
-    # elif args_cli.checkpoint:
-    #     resume_path = retrieve_file_path(args_cli.checkpoint)
+    elif args_cli.checkpoint:
+        # 2026-09-01: re-enabled. While this was commented out, --checkpoint was
+        # parsed but never used for resume_path, so the run ALWAYS auto-resolved
+        # out of log_root_path -- which is how a 38-obs/6-action model from Aug 20
+        # got loaded into a 40-obs/4-action env ("size mismatch for
+        # input_layer.weight ... [512, 38] vs [512, 40]"). ckpts/latest/ holds
+        # seven checkpoints from seven different architectures; never let it
+        # auto-resolve. Pass the path you mean.
+        resume_path = os.path.abspath(os.path.expanduser(args_cli.checkpoint))
+        if not os.path.isfile(resume_path):
+            raise FileNotFoundError(f"--checkpoint not found: {resume_path}")
     else:
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
@@ -703,8 +712,26 @@ def main():
         yaw_actual = float(np.arctan2(2*(w*qz + qx*qy), 1 - 2*(qy*qy + qz*qz)))
 
         if not hasattr(env, "_decoupled_ctrl"):
-            import scripts.co_rl.doublebee_dctrl_bad as dctrl
-            env._decoupled_ctrl = dctrl.DecoupledController()
+            # 2026-09-01: selectable baseline. DOUBLEBEE_BASELINE picks which
+            # controller runs; default "bad" preserves the previous behaviour
+            # exactly, so nothing changes unless you ask for it.
+            #   bad        doublebee_dctrl_bad      (whatever was here before)
+            #   og         doublebee_dctrl          (the original file, untouched)
+            #   faithful   doublebee_dctrl_baseline mode="faithful"   <- cite this
+            #   augmented  doublebee_dctrl_baseline mode="augmented"  <- stronger
+            _which = os.environ.get("DOUBLEBEE_BASELINE", "bad").lower()
+            if _which in ("faithful", "augmented"):
+                import scripts.co_rl.doublebee_dctrl_baseline as dctrl
+                env._decoupled_ctrl = dctrl.DecoupledBaseline(mode=_which)
+                import json as _json
+                print("[BASELINE] " + _json.dumps(env._decoupled_ctrl.describe()), flush=True)
+            elif _which == "og":
+                import scripts.co_rl.doublebee_dctrl as dctrl
+                env._decoupled_ctrl = dctrl.DecoupledController()
+            else:
+                import scripts.co_rl.doublebee_dctrl_bad as dctrl
+                env._decoupled_ctrl = dctrl.DecoupledController()
+            print(f"[BASELINE] controller = {_which}", flush=True)
 
         # --- STEP DETECTION FIRST (moved up — v_desired below needs step_ahead_val) ---
         theta_desired = 0.0
@@ -724,7 +751,11 @@ def main():
                 env._recent_step_max = 0.0
             env._recent_step_max = max(step_ahead_val, env._recent_step_max * 0.98)
 
-            LEAN_MAX = 0.28
+            # Sweep parameter. theta_desired = -LEAN_MAX * step_ahead, so this
+            # sets the peak commanded lean-back at a step. Sweep it rather than
+            # reporting one value: the classical controller has to trade pitch
+            # excursion against climb success, and the sweep shows that frontier.
+            LEAN_MAX = float(os.environ.get("DOUBLEBEE_LEAN_MAX", 0.28))
             theta_desired = -LEAN_MAX * step_ahead_val
 
             if timestep % 20 == 0:
