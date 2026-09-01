@@ -128,7 +128,15 @@ def main():
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # specify directory for logging runs: {time-stamp}_{run_name}
     log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    if agent_cfg.run_name:
+    # 2026-09-01: DOUBLEBEE_RUN_NAME labels the run directory. There is no
+    # --run_name CLI flag, so a w_E sweep launched in parallel would produce
+    # five timestamped directories with nothing to say which was which -- and
+    # runs started in the same second could collide outright. Tag them:
+    #     DOUBLEBEE_W_E=2 DOUBLEBEE_RUN_NAME=wE2 python3 train.py ...
+    _env_run_name = os.environ.get("DOUBLEBEE_RUN_NAME")
+    if _env_run_name:
+        log_dir += f"_{_env_run_name}"
+    elif agent_cfg.run_name:
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
     # This way, the Ray Tune workflow can extract experiment name.
