@@ -13,6 +13,7 @@ from isaaclab.utils.math import quat_apply
 
 # top of rewards.py, after imports
 import json, os as _os
+import os
 
 def _load_poly(json_path: str):
     with open(json_path, encoding="utf-8") as f:
@@ -1655,7 +1656,14 @@ class RewardsCfg:
     
     energy_consumption = RewTerm(
         func=penalize_energy_consumption,
-        weight=0.25, # WASS 0.1
+        # 2026-09-01: env-overridable so the w_E ablation is one command per run
+        # instead of five hand-edits of this file. Default 0.25 is what every
+        # run to date used (it was 0.1 before that), so leaving it unset
+        # reproduces the existing behaviour exactly.
+        #   DOUBLEBEE_W_E=0     no energy penalty at all
+        #   DOUBLEBEE_W_E=0.25  current / default
+        #   DOUBLEBEE_W_E=1|2|4 progressively energy-frugal
+        weight=float(os.environ.get("DOUBLEBEE_W_E", 0.25)),
     )
 
     """Penalty for total energy consumption from propellers and wheels.
