@@ -84,17 +84,25 @@ class DoubleBeeEventsCfg:
         },
     )
 
-    # Joint action logging disabled.
-    # log_prop_servo_joint_state = EventTerm(
-    #     func=joint_logging.log_propeller_servo_joint_state,
-    #     mode="interval",
-    #     interval_range_s=(0.0, 0.0),
-    #     params={
-    #         "log_path": "prop_servo_joint_log.csv",
-    #         "log_interval_steps": 1,
-    #         "env_ids_to_log": [0],
-    #     },
-    # )
+    # Joint action logging DISABLED (2026-09-01) -- it was active despite this
+    # comment, writing prop_servo_joint_log.csv EVERY step with a GPU sync to
+    # read env 0's joints. That is the same class of per-step stall that kept
+    # training at 8.2 s/iter; removing those got it to 1.2 s/iter. Set
+    # DOUBLEBEE_JOINT_LOG=1 to turn it back on for a debugging session only.
+    log_prop_servo_joint_state = (
+        EventTerm(
+            func=joint_logging.log_propeller_servo_joint_state,
+            mode="interval",
+            interval_range_s=(0.0, 0.0),
+            params={
+                "log_path": "prop_servo_joint_log.csv",
+                "log_interval_steps": 1,
+                "env_ids_to_log": [0],
+            },
+        )
+        if os.environ.get("DOUBLEBEE_JOINT_LOG", "0") not in ("0", "", "false", "False")
+        else None
+    )
 
     # Domain randomization: thrust output +/-20% per env per propeller (at reset).
     #
@@ -188,14 +196,14 @@ class DoubleBeeEventsCfg:
     # CRITICAL: Reset joints to default positions to prevent error accumulation
     # Without this, joints retain their previous state, causing PD controller to
     # try to move from reset position to previous target, accumulating error
-    # reset_robot_joints = EventTerm(
-    #     func=mdp.reset_joints_by_offset,
-    #     mode="reset",
-    #     params={
-    #         "position_range": (-0.0, 0.0),  # Reset to exact default positions (0.0 for all joints)
-    #         "velocity_range": (0.0, 0.0),  # Reset to zero velocity
-    #     },
-    # )
+    reset_robot_joints = EventTerm(
+        func=mdp.reset_joints_by_offset,
+        mode="reset",
+        params={
+            "position_range": (-0.0, 0.0),  # Reset to exact default positions (0.0 for all joints)
+            "velocity_range": (0.0, 0.0),  # Reset to zero velocity
+        },
+    )
 
     # randomize_robot_mass = EventTerm(
     #     func=randomize_rigid_body_mass,
@@ -207,26 +215,26 @@ class DoubleBeeEventsCfg:
     #     },
     # )
 
-    # randomize_robot_mass = EventTerm(
-    #     func=randomize_rigid_body_mass,
-    #     mode="reset",
-    #     params={
-    #         "asset_cfg": SceneEntityCfg("robot", body_names=["body"]),  # main body only, not .*
-    #         "mass_distribution_params": (0.95, 1.05),  # ±5% scale
-    #         "operation": "scale",
-    #     },
-    # )
+    randomize_robot_mass = EventTerm(
+        func=randomize_rigid_body_mass,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["body"]),  # main body only, not .*
+            "mass_distribution_params": (0.95, 1.05),  # ±5% scale
+            "operation": "scale",
+        },
+    )
 
-    # randomize_com = EventTerm(
-    #     func=mdp.randomize_com_positions,
-    #     mode="reset",
-    #     params={
-    #         "asset_cfg": SceneEntityCfg("robot", body_names=["body"]),
-    #         "com_distribution_params": (-0.003, 0.003),  # ±1cm COM offset
-    #         "operation": "add",
-    #         "distribution": "uniform",
-    #     },
-    # ) # WASS 0.01
+    randomize_com = EventTerm(
+        func=mdp.randomize_com_positions,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["body"]),
+            "com_distribution_params": (-0.003, 0.003),  # ±1cm COM offset
+            "operation": "add",
+            "distribution": "uniform",
+        },
+    ) # WASS 0.01
 
         # push_robot roll/pitch RAISED 0.05 -> 0.25 rad/s on 2026-08-25.
     #
@@ -274,30 +282,30 @@ class DoubleBeeEventsCfg:
         },
     )
 
-    # randomize_servo_actuator_gains = EventTerm(
-    #     func=randomize_actuator_gains,   # no mdp. prefix — imported from isaaclab.envs.mdp
-    #     mode="startup",
-    #     params={
-    #         "asset_cfg": SceneEntityCfg("robot", joint_names=["leftPropellerServo", "rightPropellerServo"]),
-    #         "stiffness_distribution_params": (0.8, 1.2),
-    #         "damping_distribution_params": (0.8, 1.2),
-    #         "operation": "scale",
-    #         "distribution": "log_uniform",
-    #     },
-    # )
+    randomize_servo_actuator_gains = EventTerm(
+        func=randomize_actuator_gains,   # no mdp. prefix — imported from isaaclab.envs.mdp
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["leftPropellerServo", "rightPropellerServo"]),
+            "stiffness_distribution_params": (0.8, 1.2),
+            "damping_distribution_params": (0.8, 1.2),
+            "operation": "scale",
+            "distribution": "log_uniform",
+        },
+    )
 
-    # randomize_friction = EventTerm(
-    #         func=mdp.randomize_rigid_body_material,
-    #         mode="reset",
-    #         params={
-    #             "asset_cfg": SceneEntityCfg("robot", body_names=["leftWheel", "rightWheel"]),
-    #             "static_friction_range": (0.8, 1.2),
-    #             "dynamic_friction_range": (0.7, 1.0),
-    #             "restitution_range": (0.0, 0.0),
-    #             "num_buckets": 64,
-    #             "make_consistent": True,  # keeps dynamic <= static
-    #         },
-    #     )
+    randomize_friction = EventTerm(
+            func=mdp.randomize_rigid_body_material,
+            mode="reset",
+            params={
+                "asset_cfg": SceneEntityCfg("robot", body_names=["leftWheel", "rightWheel"]),
+                "static_friction_range": (0.8, 1.2),
+                "dynamic_friction_range": (0.7, 1.0),
+                "restitution_range": (0.0, 0.0),
+                "num_buckets": 64,
+                "make_consistent": True,  # keeps dynamic <= static
+            },
+        )
 
 @configclass
 class DoubleBeeEventsCfg_PLAY:
