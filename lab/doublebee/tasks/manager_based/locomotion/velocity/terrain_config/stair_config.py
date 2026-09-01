@@ -96,8 +96,8 @@ STAIR_TERRAINS_CFG = TerrainGeneratorCfg(
                     # terminal_goal_reached, which has been 0.0000 in every run.
                     # The elevated targets stay in the distribution so climbing
                     # is still what the far half of the range demands.
-                    y_range=(0.5, 2.0),
-                    z_range=(0.0, 0.20),
+                    y_range=(1.5, 3.2),
+                    z_range=(0.03, 0.20),
                     max_height_diff=0.25,
                 ),
             },
@@ -166,8 +166,8 @@ STAIR_TERRAINS_CFG_PLAY = TerrainGeneratorCfg(
                     # STAIR_TERRAINS_CFG too. A play target the policy never
                     # trained on makes play misleading in exactly the asymmetric
                     # way documented on step_height_range above.
-                    y_range=(0.5, 2.0),   # match training
-                    z_range=(0.0, 0.20),  # match training
+                    y_range=(1.5, 3.2),   # match training
+                    z_range=(0.03, 0.20), # match training
                     max_height_diff=0.25,
                 ),
             },

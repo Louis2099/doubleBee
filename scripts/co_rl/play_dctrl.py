@@ -721,9 +721,40 @@ def main():
 
         w, qx, qy, qz = quat[0].item(), quat[1].item(), quat[2].item(), quat[3].item()
 
-        theta = float(np.arcsin(np.clip(2*(w*qy - qz*qx), -1.0, 1.0)))
-        theta_dot = ang_vel[0].item()
+        # 2026-09-01 AXIS FIX. This was asin(2(w*qy - qz*qx)) = rotation about
+        # the body Y axis, while theta_dot is ang_vel[0] = rate about X and
+        # v_fwd is lin_vel[1] = forward is body +Y. With forward = +y and up =
+        # +z, the nose-up/down axis is X, so theta_dot was right and theta was
+        # measuring the wrong axis entirely.
+        #
+        # Symptom: theta pinned at 0.0 deg while theta_dot ran to -3.5 rad/s --
+        # impossible for one axis. The controller saw "upright", never
+        # corrected, and omega_theta_e = -theta_dot drove sigma to the +45 deg
+        # stop; thrust tilted 45 deg forward then accelerated the robot
+        # 0.34 -> 0.73 m/s against v_des = 0.17 and tipped it.
+        #
+        # DOUBLEBEE_THETA_SIGN flips the convention without editing code.
+        # Positive rotation about +x carries +y toward +z, i.e. nose UP, so
+        # with sign +1: theta > 0 is leaning back, theta < 0 is nose down.
+        # play_dctrl commands theta_desired = -LEAN_MAX*step_ahead, so if the
+        # robot leans the WRONG way at a riser, flip this to -1.
+        _th_sign = float(os.environ.get("DOUBLEBEE_THETA_SIGN", 1.0))
+        theta = _th_sign * float(np.arctan2(2*(w*qx + qy*qz),
+                                            1.0 - 2*(qx*qx + qy*qy)))
+        theta_dot = _th_sign * ang_vel[0].item()
         v_fwd     = lin_vel[1].item()
+
+        # Consistency check: theta_dot must be d(theta)/dt. If these disagree
+        # the axes are mismatched again and nothing downstream is meaningful.
+        if not hasattr(env, "_theta_prev"):
+            env._theta_prev = theta
+        _dtheta_fd = (theta - env._theta_prev) / 0.02
+        env._theta_prev = theta
+        if timestep % 20 == 0:
+            print("[AXIS CHECK] theta=%+.1fdeg  theta_dot=%+.2f  d(theta)/dt=%+.2f"
+                  "  %s" % (np.degrees(theta), theta_dot, _dtheta_fd,
+                            "OK" if abs(theta_dot - _dtheta_fd) < 1.0
+                            else "MISMATCH -- axes disagree"), flush=True)
 
         yaw_rate_actual = ang_vel[2].item()
         yaw_actual = float(np.arctan2(2*(w*qz + qx*qy), 1 - 2*(qy*qy + qz*qz)))
