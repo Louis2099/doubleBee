@@ -95,7 +95,13 @@ Parity items to state in the paper (this file enforces the first three):
   - tuning:      record how many gain sets you tried (tuning_budget below).
 """
 
+import os
+
 import numpy as np
+
+# --- Geometry, for the statics-derived thrust floor. ---
+L_COM_M = 0.14      # CoM height above the wheel axle
+L_PROP_M = 0.44     # propeller height above the wheel axle
 
 # --- Actuation limits. These MUST match the simulator and the hardware. ---
 # Per-propeller thrust at the simulator's PWM cap (aerodynamics.py clamps PWM
@@ -130,6 +136,14 @@ class DecoupledBaseline:
         if mode not in ("faithful", "augmented"):
             raise ValueError("mode must be 'faithful' or 'augmented', got %r" % mode)
         self.mode = mode
+        # DOUBLEBEE_EQ20=0 disables the Eq. (20) sign rule for an A/B. The rule
+        # is transcribed literally from the paper, but the paper's theta/sigma
+        # sign convention is not obviously the same as our USD's, and if it is
+        # not, the rule starves thrust exactly when the robot needs it. Settle
+        # it by experiment, then pin it and say which you used.
+        _eq20_env = os.environ.get("DOUBLEBEE_EQ20")
+        if _eq20_env is not None:
+            use_eq20_sign = _eq20_env not in ("0", "false", "False", "")
         self.use_eq20_sign = bool(use_eq20_sign)
         self.servo_bias_sign = float(servo_bias_sign)
         self.enforce_limits = bool(enforce_limits)
@@ -160,10 +174,22 @@ class DecoupledBaseline:
         # so T_hold sits essentially exactly at the climb threshold.
         self.T_hold = 8.66
 
-        # Thrust floor. With T free to reach 0 the robot has NO attitude
-        # authority at all, which is a failure the paper's controller does not
-        # have (it commands about a hold throttle, not about zero).
-        self.T_floor = 0.5 * self.T_hold
+        # Thrust floor, set from statics rather than picked.
+        #
+        # The propeller restoring moment is f_p*L_p*sin(theta) and gravity's
+        # toppling moment is m*g*L_com*sin(theta). The sin(theta) CANCELS, so
+        # there is a single total-thrust threshold below which the props cannot
+        # out-torque gravity at ANY lean angle:
+        #     f_p > m*g*L_com/L_p = 31.57 * 0.14/0.44 = 10.05 N  (32% of weight)
+        # Below it the robot is falling no matter what the servos do.
+        #
+        # 0.5*T_hold = 4.33 N/prop = 8.66 N total = 27% of weight -- UNDER the
+        # threshold. Observed directly: Eq. (20) cut T to that floor while the
+        # robot was falling (theta -4.8 -> -12.4 deg, T pinned at 4.3), which
+        # made recovery impossible by construction.
+        self.T_static_threshold = (ROBOT_WEIGHT_N * L_COM_M / L_PROP_M) / 2.0
+        self.T_floor = float(os.environ.get(
+            "DOUBLEBEE_T_FLOOR", self.T_static_threshold))
 
         # Anti-windup. Without a clamp the integrators wind up during the
         # seconds the robot spends pinned against a riser, and the baseline
@@ -337,6 +363,8 @@ class DecoupledBaseline:
             "T_hold_N_per_prop": self.T_hold,
             "T_hold_frac_of_weight": round(2 * self.T_hold / ROBOT_WEIGHT_N, 3),
             "T_floor_N_per_prop": self.T_floor,
+            "T_static_threshold_N_per_prop": round(self.T_static_threshold, 3),
+            "T_floor_above_static_threshold": bool(self.T_floor >= self.T_static_threshold),
             "limits": {
                 "T_max_N_per_prop": T_MAX_PER_PROP_N,
                 "servo_rad": SERVO_LIMIT_RAD,
