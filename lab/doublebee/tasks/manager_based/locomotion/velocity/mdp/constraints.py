@@ -11,6 +11,9 @@ from isaaclab.sensors import ContactSensor
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 
+import os as _os
+_DEBUG_GOAL = bool(_os.environ.get("DOUBLEBEE_DEBUG_GOAL"))
+
 def propeller_collision(
     env: ManagerBasedEnv,
     sensor_cfg: SceneEntityCfg,
@@ -342,7 +345,13 @@ def goal_reached(
         goal_reached = goal_reached.unsqueeze(0)
 
     # add inside goal_reached, after computing all the check tensors, before the return
-    if close_enough[0].item():
+    # 2026-08-31: gated behind DOUBLEBEE_DEBUG_GOAL. `close_enough[0].item()` is a
+    # GPU sync on EVERY call, and goal_reached is called from the reward term, the
+    # constraint manager and the curriculum -- so several syncs per step, plus 7
+    # more and a flushed stdout write on every step env0 sits near the target.
+    # With success now ~14% that fires constantly. Same gating pattern as
+    # DOUBLEBEE_DEBUG_RESET in off_policy_runner.
+    if _DEBUG_GOAL and close_enough[0].item():
         print(f"[NEAR GOAL env0] close={close_enough[0].item()} "
             f"upright={is_upright[0].item()} "
             f"settled={is_settled[0].item()} "
