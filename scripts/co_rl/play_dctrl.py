@@ -454,7 +454,18 @@ def main():
                 print("[INFO] To enable ONNX export, install: pip install onnx")
     
     # export environment to pdf
-    export_env_as_pdf(yaml_path=os.path.join(log_dir, "params", "env.yaml"), pdf_path=os.path.join(export_model_dir, "env.pdf"))
+    # 2026-09-01: non-fatal. With DOUBLEBEE_SKIP_POLICY there is no checkpoint,
+    # so log_dir falls back to log_root_path and log_dir/params/env.yaml does
+    # not exist. A missing debug PDF must never kill a baseline run.
+    _env_yaml = os.path.join(log_dir, "params", "env.yaml")
+    if os.path.isfile(_env_yaml):
+        try:
+            export_env_as_pdf(yaml_path=_env_yaml,
+                              pdf_path=os.path.join(export_model_dir, "env.pdf"))
+        except Exception as e:
+            print(f"[WARNING] env.pdf export skipped: {e}", flush=True)
+    else:
+        print(f"[INFO] no {_env_yaml} -- skipping env.pdf export", flush=True)
 
     # Check if this is a doubleBee velocity tracking task
     is_doublebee_velocity = isinstance(env.unwrapped, ManagerBasedConstraintRLEnv) and "doublebee" in args_cli.task.lower() and "velocity" in args_cli.task.lower()
