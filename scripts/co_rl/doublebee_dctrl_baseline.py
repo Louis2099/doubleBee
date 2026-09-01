@@ -219,7 +219,23 @@ class DecoupledBaseline:
         self.Kb_p = 5.0                       # wheel pitch feedback
         self.Kb_d = 1.0                       # wheel pitch-rate feedback
         self.balance_blend_deg = 20.0         # fades out beyond this |theta|
-        self.Kyaw_p = 0.6                     # heading hold toward yaw = 0
+        # Heading hold toward yaw = 0. NOT in [7] Eq. (23).
+        #
+        # 2026-09-01: default 0.6 -> 0.15, and a sign flag. play_dctrl maps the
+        # wheel pair to a CommonDiff action space with diff gain S/(2D) = 23.6/8
+        # = 2.95, so the heading term is multiplied by ~3 on the way to the
+        # actuator. At 0.6, with yaw_gain_scale up to 2.5 and a 49 deg error,
+        # the differential channel came out at 3.4x full scale -- pinned at -1,
+        # i.e. bang-bang yaw. Observed as yaw running -25 -> -64 deg at
+        # -3 rad/s. Staying inside the channel at a 49 deg error needs
+        # Kyaw_p <= 0.175.
+        #
+        # The sign was also wrong: yaw error grew monotonically while the
+        # correction was active, which only happens if the feedback is
+        # positive. DOUBLEBEE_YAW_SIGN=-1 flips it; settle by experiment since
+        # it depends on the CommonDiff diff-channel convention, not on [7].
+        self.Kyaw_p = float(os.environ.get("DOUBLEBEE_KYAW", 0.15))
+        self.yaw_sign = float(os.environ.get("DOUBLEBEE_YAW_SIGN", 1.0))
 
         # Reproducibility bookkeeping. Set this to the number of gain
         # configurations actually evaluated, and report it in the paper --
@@ -337,7 +353,7 @@ class DecoupledBaseline:
                 1.0 - abs(theta) / np.radians(self.balance_blend_deg), 0.0, 1.0))
             wheel_balance = self.Kb_p * theta + self.Kb_d * theta_dot
             # NOT in [7] either. Heading hold toward yaw = 0.
-            heading = self.Kyaw_p * yaw_gain_scale * (0.0 - yaw)
+            heading = self.yaw_sign * self.Kyaw_p * yaw_gain_scale * (0.0 - yaw)
             tau_w1 += blend * wheel_balance - heading
             tau_w2 += blend * wheel_balance + heading
 
@@ -404,7 +420,7 @@ class DecoupledBaseline:
             d["augmented_gains"] = {
                 "Kb_p": self.Kb_p, "Kb_d": self.Kb_d,
                 "balance_blend_deg": self.balance_blend_deg,
-                "Kyaw_p": self.Kyaw_p,
+                "Kyaw_p": self.Kyaw_p, "yaw_sign": self.yaw_sign,
             }
         return d
 
