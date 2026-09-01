@@ -111,59 +111,62 @@ class TerrainTargetDirectionCommand(UniformVelocityCommand):
         
         # Initialize targets for all environments
         all_env_ids = torch.arange(self.num_envs, device=self.device)
-        self._resample_command(all_env_ids.tolist())
+        self._resample_command(all_env_ids)
     
     def _resample_command(self, env_ids: Sequence[int]):
         """Sample new target positions from terrain for specified environments.
-        
+
         Args:
             env_ids: Environment indices to resample targets for.
         """
-        if len(env_ids) == 0:
+        # 2026-08-31: VECTORIZED. This was a Python loop over env_ids doing three
+        # GPU syncs per env (terrain_levels[i].item(), terrain_types[i].item(),
+        # randint(...).item()) plus ~10 single-element kernel launches. Episodes
+        # currently last ~26 steps, so ~num_envs/26 envs reset EVERY step --
+        # about 1.9k resets and 5.7k syncs per iteration at 1024 envs. Same
+        # class of stall as the reset-path syncs gated in off_policy_runner.
+        #
+        # Semantics are unchanged: still one uniformly-random patch per env from
+        # that env's (level, type) tile, still + env_origin, still +0.3 on z.
+        # Only the RNG draw order differs -- that changes the sample, not its
+        # distribution.
+        if isinstance(env_ids, torch.Tensor):
+            if env_ids.numel() == 0:
+                return
+            idx = env_ids.long()
+        else:
+            if len(env_ids) == 0:
+                return
+            idx = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+
+        num_patches = self.target_patches.shape[2]
+        if num_patches == 0:
+            # No targets available, set to zero
+            self.current_targets_w[idx, :] = 0.0
             return
-        
-        terrain_levels = self.terrain.terrain_levels  # [num_envs]
-        terrain_types = self.terrain.terrain_types     # [num_envs]
-        env_origins = self._env.scene.env_origins      # [num_envs, 3]
-        
-        # For each environment, sample a random target
-        for env_idx in env_ids:
-            # NOTE: In play mode with aligned initialization, the reset function
-            # (reset_root_state_from_terrain_aligned) will set the target AFTER
-            # this resample function runs. So we always resample here, and the
-            # aligned reset function will overwrite it with an aligned target.
-            # This ensures aligned initialization works correctly.
-            
-            level = terrain_levels[env_idx].item()
-            ttype = terrain_types[env_idx].item()
-            
-            # Get target patches for this environment's terrain type
-            targets = self.target_patches[level, ttype, :, :]  # [num_patches, 3]
-            num_patches = targets.shape[0]
-            
-            if num_patches == 0:
-                # No targets available, set to zero
-                self.current_targets_w[env_idx, :] = 0.0
-                continue
-            
-            # Randomly select one target patch
-            patch_idx = torch.randint(0, num_patches, (1,), device=self.device).item()
-            target_relative = targets[patch_idx, :]  # [3]
-            
-            # Transform to world coordinates
-            target_world = target_relative + env_origins[env_idx, :]
-            
-            # NOTE: WORKAROUND: Add height offset to account for terrain step heights
-            # Flat patches are stored with Z=0 relative to terrain base, but they may be on steps
-            # at various heights. Since we can't query the actual terrain height here, we use
-            # a fixed offset that approximates the average step height.
-            # Note: This only affects visualization - rewards/constraints use XY only, so Z doesn't matter
-            # For inverted pyramid with step_height_range=(0.01, 0.18), average step height is ~0.1m
-            # Using 0.5m offset to account for multiple steps (up to ~0.72m for 4 steps)
-            target_world[2] += 0.3  # Add 50cm offset to approximate step height
-            
-            self.current_targets_w[env_idx, :] = target_world
-    
+
+        levels = self.terrain.terrain_levels[idx].long()
+        types = self.terrain.terrain_types[idx].long()
+
+        # One random patch per env, drawn in a single kernel.
+        patch_idx = torch.randint(0, num_patches, (idx.numel(),), device=self.device)
+
+        # Advanced indexing gathers [N, 3] in one shot -- this is the whole point.
+        target_rel = self.target_patches[levels, types, patch_idx, :]
+
+        # Transform to world coordinates. This is an addition, so it allocates a
+        # new tensor and the +0.3 below cannot alias back into target_patches.
+        target_world = target_rel + self._env.scene.env_origins[idx, :]
+
+        # NOTE: WORKAROUND: Add height offset to account for terrain step heights
+        # Flat patches are stored with Z=0 relative to terrain base, but they may be on steps
+        # at various heights. Since we can't query the actual terrain height here, we use
+        # a fixed offset that approximates the average step height.
+        # Note: This only affects visualization - rewards/constraints use XY only, so Z doesn't matter
+        target_world[:, 2] += 0.3
+
+        self.current_targets_w[idx, :] = target_world
+
     def _update_command(self):
         """Update velocity command every step to point toward current target.
         
