@@ -19,3 +19,9 @@ w_E sweep        energy_consumption weight in {0, 0.25, 1, 2, 4}   5 runs
 constant thrust  task Isaac-Velocity-HybridStair-DoubleBee-ConstThrust-v1-ppo
 wheels-only      propeller + servo actions disabled
 seeds            3 seeds on the baseline arm
+
+---
+
+How to run it as a baseline: sweep theta_desired ∈ {0, −20, −40, −60, −80}° rather than picking one — IROS'26 only showed −80° climbing and 0° failing, and the sweep turns that anecdote into the controller's actual frontier. Log describe() beside every trial; it dumps mode, every gain, every limit, and whether any deviation was active. Set tuning_budget to how many gain sets you tried — "undertuned baseline" is the reviewer's default objection and a stated budget is the only answer.
+
+One thing the file enforces but the paper has to state: this baseline is blind, and the policy gets a 16-dim height scan. Don't let "sees the terrain vs doesn't" ride along as "learned vs classical."
