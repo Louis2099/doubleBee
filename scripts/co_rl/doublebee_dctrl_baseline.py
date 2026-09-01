@@ -187,6 +187,15 @@ class DecoupledBaseline:
         # a stated tuning budget is the only answer to it.
         self.tuning_budget = None
 
+        # What the harness feeds this controller. Defaults describe
+        # play_dctrl.py, which supplies both. Override if you run it elsewhere.
+        self.terrain_preview = (
+            "height_scanner -> step_ahead -> theta_desired = -LEAN_MAX*step_ahead "
+            "(feedforward lean-back schedule); parity with the policy's height scan")
+        self.velocity_command_source = (
+            "autonomous: v_desired = clip(dist_to_target*0.15, 0, 0.30), "
+            "floored at 0.15 near a step; NO human pilot")
+
         self.reset()
 
     def reset(self):
@@ -337,7 +346,17 @@ class DecoupledBaseline:
             "anti_windup": {"Te": self.int_limit_Te, "sig": self.int_limit_sig},
             "d_lpf_alpha": self.d_lpf_alpha,
             "tuning_budget_configs_tried": self.tuning_budget,
-            "terrain_preview": "NONE - this baseline is blind",
+            # Set by the harness. play_dctrl.py DOES give this baseline terrain
+            # preview: it reads scene["height_scanner"], forms
+            # step_ahead = clip((max_ahead - ground_z)/0.04, 0, 1) and commands
+            # theta_desired = -LEAN_MAX * step_ahead, i.e. a feedforward
+            # lean-back schedule triggered by the riser. It also drives
+            # v_desired from target distance, so there is no human pilot.
+            # That is information parity with the policy and full autonomy --
+            # a stronger baseline than the human-operated one in IROS'26.
+            # Do not report this controller as blind.
+            "terrain_preview": self.terrain_preview,
+            "velocity_command_source": self.velocity_command_source,
         }
         if self.mode == "augmented":
             d["augmented_gains"] = {
