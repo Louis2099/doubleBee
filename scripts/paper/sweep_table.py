@@ -57,11 +57,20 @@ def scalars(run_dir):
     return out
 
 
-def peak(series):
-    """Index of peak by success x terrain_levels, plus the values there."""
+def peak(series, min_iter=500):
+    """Index of peak by success x terrain_levels, plus the values there.
+
+    min_iter exists because terrain_levels starts near 2.0 -- Isaac Lab spreads
+    fresh environments across all 5 curriculum rows at init, so the MEAN level
+    is ~2.0 before any learning -- and then FALLS as the curriculum demotes
+    environments that fail. Combined with success being ~0.01 of random noise
+    early on, the product success x terrain_levels is maximal at iteration 2,
+    which is what this function reported on 2026-09-02 before the guard was
+    added. Nothing before the curriculum has sorted itself is a real peak.
+    """
     succ = dict(series["success"])
     lvl = dict(series["levels"])
-    common = sorted(set(succ) & set(lvl))
+    common = sorted(s for s in (set(succ) & set(lvl)) if s >= min_iter)
     if not common:
         return None
     best = max(common, key=lambda s: succ[s] * lvl[s])
@@ -82,6 +91,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("root", help="the tqc/ log directory holding the *_wE* runs")
     p.add_argument("--latex", action="store_true")
+    p.add_argument("--min-iter", dest="min_iter", type=int, default=500,
+                   help="ignore iterations before this; terrain_levels starts "
+                        "near 2.0 from the initial curriculum spread and decays, "
+                        "so early points look like spurious peaks (default 500)")
     a = p.parse_args()
 
     runs = []
@@ -91,11 +104,13 @@ def main():
         w = w_e_of(os.path.basename(d))
         if w is None:
             continue
-        pk = peak(scalars(d))
+        pk = peak(scalars(d), a.min_iter)
         if pk:
             runs.append((w, os.path.basename(d), pk))
     if not runs:
-        sys.exit("no *_wE* runs with scalars found under %s" % a.root)
+        sys.exit("no *_wE* run has reached iteration %d yet under %s\n"
+                 "(use --min-iter 0 to see raw early numbers, but they are not peaks)"
+                 % (a.min_iter, a.root))
     runs.sort()
 
     if a.latex:
