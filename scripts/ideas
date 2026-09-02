@@ -1,0 +1,12 @@
+What it costs at the limit
+h	lever	τ needed/wheel	thrust needed
+2 cm	4.5 cm	0.71 N·m	28% of weight
+4 cm	5.7 cm	0.89 N·m	43%
+6 cm = r	6.0 cm	0.95 N·m	46%
+Your wheels deliver 0.51 N·m — short at every height, even 2 cm. So thrust isn't optional anywhere in this range; at 6 cm the propellers must carry 46% of the robot's weight just to unload the wheels enough for them to turn the corner. You have 36.6 N against a 31.6 N weight (T/W = 1.16), so it's reachable — but a wheels-only version of this robot cannot climb a 6 cm step at any torque.
+
+Notice the curve flattens: 4 cm needs 43%, 6 cm needs 46%. The hard part isn't the height, it's crossing the threshold at all. Once thrust is unloading the wheels, going from 4 to 6 cm is nearly free. That's a nice thing to say in the paper.
+
+---
+
+"the deployment terrain is a realization of the training distribution in both riser height and tread depth."

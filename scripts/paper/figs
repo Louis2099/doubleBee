@@ -40,3 +40,22 @@ Figures 1, 4, and 6 need no new training run — 4 and 6 use data you already ha
 If you want, I can write the plotting script for #1 now against hw_v34.csv so it's ready the moment the 15 trials land — it's the same data pipeline, just aggregated.
 
 (Separately: the Gmail, Calendar and Drive connectors still need authorising in your claude.ai connector settings before I can use them — not needed for any of this.)
+
+3. The physics panel — you have this and nobody else can write it.
+
+Three small plots:
+
+required wheel torque vs step height, with your 0.51 N·m limit as a horizontal line — it's below the curve everywhere, so wheels alone can never climb, at any height
+required thrust fraction vs step height — 46% of weight at 6 cm, against T/W = 1.16 available
+h_max = r — the geometric wall
+This turns "our robot uses thrust to climb" from a design choice into a derived necessity. It's the figure that justifies the whole platform, and it costs you an afternoon of matplotlib with numbers you already have.
+
+4. Their Fig. 4, done better: aggregate instead of anecdote.
+
+Their version is one episode. Yours should be thrust magnitude vs distance-to-riser, mean ± IQR over 100+ episodes, with the riser at x = 0. If the policy really learned "thrust only when needed," that plot shows a sharp band that rises at the step and falls after — across the whole distribution, not one lucky run. Add servo angle as a second trace; their figure omits the servo, which is the actuator that makes this robot distinctive.
+
+5. RL vs PID on the same riser, overlaid.
+
+Same four panels, two controllers, one plot each. Shows how they differ — the PID holds near-constant thrust (your baseline's T_hold), the policy modulates. That's exactly the IROS'26 hardware finding (1348–1355 µs constant vs 1145–1435 µs modulated) reproduced in sim where you can run it 100 times instead of 3.
+
+6. The train/deploy distribution figure — the one that answers your reviewer. Training step-height distribution with deployment conditions marked inside it
