@@ -13,6 +13,18 @@ from isaaclab.managers import SceneEntityCfg
 
 import os as _os
 _DEBUG_GOAL = bool(_os.environ.get("DOUBLEBEE_DEBUG_GOAL"))
+# Success-criterion ablation counters: ON by default (cheap, no syncs in the
+# hot path). Set DOUBLEBEE_SUCCESS_ABLATION=0 to silence.
+_SUCCESS_ABLATION = _os.environ.get("DOUBLEBEE_SUCCESS_ABLATION", "1") not in ("0", "", "false", "False")
+_SUCCESS_EVERY = int(_os.environ.get("DOUBLEBEE_SUCCESS_EVERY", 2000))
+# Which criteria GATE the terminal reward. Default "all" reproduces the
+# behaviour of every run to date; the other three exist for the ablation.
+_SUCCESS_MODE = _os.environ.get("DOUBLEBEE_SUCCESS_MODE", "all").lower()
+if _SUCCESS_MODE not in ("xy", "xyz", "xyzu", "all"):
+    raise ValueError("DOUBLEBEE_SUCCESS_MODE must be xy|xyz|xyzu|all, got %r" % _SUCCESS_MODE)
+if _SUCCESS_MODE != "all":
+    print("[SUCCESS ABLATION] terminal reward gated on %r, NOT the usual four criteria"
+          % _SUCCESS_MODE, flush=True)
 
 def propeller_collision(
     env: ManagerBasedEnv,
@@ -337,7 +349,81 @@ def goal_reached(
         # no target Z available — skip height check
         at_height = torch.ones(env.num_envs, device=env.device, dtype=torch.bool)
 
-    goal_reached = (close_enough & is_upright & is_settled & at_height).float()
+    # DOUBLEBEE_SUCCESS_MODE selects WHICH criteria gate the terminal reward.
+    # This is a training-signal ablation, not a reporting one: the conjunction
+    # decides which terminal states the policy is paid for, so a looser gate
+    # teaches it to finish in attitudes the hardware cannot survive. The
+    # counters below always score all four subsets regardless of the mode, so a
+    # run trained under one gate is still measured under every gate.
+    #   xy    proximity only              (the naive criterion)
+    #   xyz   + elevation                 (climbing required)
+    #   xyzu  + uprightness               (no rate check)
+    #   all   + settled body rate         (ours, the default)
+    if _SUCCESS_MODE == "xy":
+        _gate = close_enough
+    elif _SUCCESS_MODE == "xyz":
+        _gate = close_enough & at_height
+    elif _SUCCESS_MODE == "xyzu":
+        _gate = close_enough & at_height & is_upright
+    else:
+        _gate = close_enough & is_upright & is_settled & at_height
+    goal_reached = _gate.float()
+
+    # ---- success-criterion ablation counters (2026-09-02) -------------------
+    # The four criteria gate the TERMINAL REWARD, so they are a training signal
+    # and not only a reporting convention: a looser criterion pays the policy
+    # for terminal states the hardware cannot survive. This accumulates, for
+    # the same trajectories, how often each nested subset would have declared
+    # success -- which gives the inflation factor alpha directly -- plus the
+    # attitude at which the XY-only criterion would have fired, which is the
+    # sim2real argument in physical units.
+    #
+    # Everything stays on the GPU; the only .item() calls happen at print time,
+    # once every DOUBLEBEE_SUCCESS_EVERY calls (default 2000 ~= every 80
+    # iterations at 24 calls/iteration). Cost per call is a handful of reduces.
+    if _SUCCESS_ABLATION:
+        if not hasattr(env, "_succ_abl"):
+            env._succ_abl = {
+                "n": 0,
+                "xy": torch.zeros((), device=env.device),
+                "xyz": torch.zeros((), device=env.device),
+                "xyzu": torch.zeros((), device=env.device),
+                "all": torch.zeros((), device=env.device),
+                # attitude at which XY-only would have fired but all-four did not
+                "lean_sum": torch.zeros((), device=env.device),
+                "rate_sum": torch.zeros((), device=env.device),
+                "loose_n": torch.zeros((), device=env.device),
+            }
+        _a = env._succ_abl
+        _xy = close_enough
+        _xyz = close_enough & at_height
+        _xyzu = _xyz & is_upright
+        _all = _xyzu & is_settled
+        _a["xy"] += _xy.sum()
+        _a["xyz"] += _xyz.sum()
+        _a["xyzu"] += _xyzu.sum()
+        _a["all"] += _all.sum()
+        # states the loose criterion would have accepted and the strict one rejects
+        _loose = _xy & (~_all)
+        _lean = torch.rad2deg(torch.arccos(torch.clamp(uprightness, -1.0, 1.0)))
+        _a["lean_sum"] += (_lean * _loose).sum()
+        _a["rate_sum"] += (ang_vel_mag * _loose).sum()
+        _a["loose_n"] += _loose.sum()
+        _a["n"] += 1
+        if _a["n"] % _SUCCESS_EVERY == 0:
+            xy = _a["xy"].item(); allf = _a["all"].item()
+            ln = _a["loose_n"].item()
+            print("[SUCCESS ABLATION] hits: XY %d | +Z %d | +upright %d | +settled(all four) %d"
+                  "  ->  alpha = XY/all = %s"
+                  % (xy, _a["xyz"].item(), _a["xyzu"].item(), allf,
+                     ("%.2f" % (xy / allf)) if allf > 0 else "n/a (no strict successes yet)"),
+                  flush=True)
+            print("[SUCCESS ABLATION] states XY-only accepts but all-four rejects: "
+                  "n=%d  mean lean %.1f deg  mean body rate %.2f rad/s"
+                  % (ln, (_a["lean_sum"].item() / ln) if ln > 0 else float("nan"),
+                     (_a["rate_sum"].item() / ln) if ln > 0 else float("nan")),
+                  flush=True)
+    # -------------------------------------------------------------------------
 
     if goal_reached.dim() > 1:
         goal_reached = goal_reached.squeeze()

@@ -1,0 +1,7 @@
+Full (4 runs, ~5 h sequential): train under each criterion set.
+
+config	criteria gating the terminal reward
+XY	proximity only
+XY+Z	proximity + elevation
+XY+Z+U	+ uprightness
+all four	+ settled rate (ours)
