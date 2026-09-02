@@ -751,11 +751,21 @@ def main():
             if getattr(env.unwrapped, "_last_propeller_thrust_total", None) is not None:
                 total_thrust = env.unwrapped._last_propeller_thrust_total[0].item()
             if not policy_io_header_written:
-                header = ["step"] + [f"obs_{i}" for i in range(len(o))] + [f"action_{i}" for i in range(len(a))] + ["total_thrust"]
+                # pos/quat added 2026-09-02: without the robot's height there is
+                # no way to locate the riser in the trace, so an event-triggered
+                # average over many climbs (the figure that replaces a
+                # single-episode anecdote) cannot be built from this log.
+                header = (["step"] + [f"obs_{i}" for i in range(len(o))]
+                          + [f"action_{i}" for i in range(len(a))]
+                          + ["total_thrust", "pos_x", "pos_y", "pos_z",
+                             "qw", "qx", "qy", "qz"])
                 policy_io_writer = csv.writer(policy_io_file)
                 policy_io_writer.writerow(header)
                 policy_io_header_written = True
-            policy_io_writer.writerow([timestep] + o.tolist() + a.tolist() + [total_thrust])
+            _rp = env.unwrapped.scene["robot"].data.root_pos_w[0].detach().cpu().numpy()
+            _rq = env.unwrapped.scene["robot"].data.root_quat_w[0].detach().cpu().numpy()
+            policy_io_writer.writerow([timestep] + o.tolist() + a.tolist()
+                                      + [total_thrust] + _rp.tolist() + _rq.tolist())
         
         # Update target visualizer if enabled
         if target_visualizer is not None:
