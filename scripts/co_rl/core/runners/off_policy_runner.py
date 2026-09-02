@@ -258,7 +258,19 @@ class OffPolicyRunner:
 
             # print(f"[DEBUG] buffer.size: {self.alg.buffer.size}, update_after: {self.alg.update_after}")
 
-            if self.alg.buffer.size > 50000:   # ~1 iter of fill at 2048 envs before updating
+            # DOUBLEBEE_WARMUP_STEPS: transitions required before the first
+            # gradient step. 50000 is ~5% of the 1e6 buffer, i.e. ~2 iterations
+            # at 1024 envs -- fine for a fresh run, WRONG for a resume under
+            # changed dynamics. 2026-09-01: resuming a converged policy with DR
+            # newly enabled destroyed it inside ~1200 updates, because those
+            # updates ran on a 5%-full buffer holding nothing but transitions
+            # from a policy already being perturbed. terrain_levels went
+            # 1.36 -> 0.007 and episode length 280 -> 35.
+            #
+            # For a DR resume use ~300000 (30% full, ~12 iterations of pure
+            # collection first, about 15 s). Costs nothing, and the first
+            # gradient then sees a representative sample of the NEW dynamics.
+            if self.alg.buffer.size > int(os.environ.get("DOUBLEBEE_WARMUP_STEPS", 50000)):
                 self.alg.update(update_cnt=self.num_steps_per_env)
                 self._grad_steps = getattr(self, "_grad_steps", 0) + self.num_steps_per_env
 

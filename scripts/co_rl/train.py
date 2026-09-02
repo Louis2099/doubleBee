@@ -204,7 +204,17 @@ def main():
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
-        runner.load(resume_path)
+        # DOUBLEBEE_RESUME_FRESH_OPTIM=1 skips restoring the Adam state.
+        # Restoring it is right when the task is unchanged. It is actively
+        # harmful when resuming a converged policy under CHANGED dynamics
+        # (DR switched on, reward edited): momentum and variance accumulated
+        # over ~120k steps on the old distribution meet gradients from a new
+        # one, the effective step size explodes, and a good policy is gone in
+        # a few hundred updates. Pair with a larger DOUBLEBEE_WARMUP_STEPS.
+        _fresh = os.environ.get("DOUBLEBEE_RESUME_FRESH_OPTIM", "0") not in ("0", "", "false", "False")
+        if _fresh:
+            print("[resume] optimizer state NOT restored (DOUBLEBEE_RESUME_FRESH_OPTIM)")
+        runner.load(resume_path, load_optimizer=not _fresh)
 
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
