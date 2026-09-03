@@ -37,24 +37,30 @@ def main():
     a = p.parse_args()
 
     # climb_wE0p25_h5.csv -> ("wE0p25", 5)
-    data = {}
+    data, pid = {}, []
     for path in sorted(glob.glob(a.pattern)):
-        m = re.search(r"climb_wE([0-9p]+)_h(\d+)\.csv$", os.path.basename(path))
-        if not m:
+        base = os.path.basename(path)
+        # climb_pid_h5.csv is the decoupled/PID baseline, produced by
+        # play_dctrl.py --step_height --climb_episodes on the SAME pinned
+        # terrain. It is not a w_E setting and gets its own series.
+        mp = re.search(r"climb_pid_h(\d+)\.csv$", base)
+        m = re.search(r"climb_wE([0-9p]+)_h(\d+)\.csv$", base)
+        if not m and not mp:
             print("skipping unparsable name: %s" % path)
             continue
-        w = float(m.group(1).replace("p", "."))
-        h = int(m.group(2))
+        w = None if mp else float(m.group(1).replace("p", "."))
+        h = int((mp or m).group(1 if mp else 2))
         recs = list(csv.DictReader(open(path)))
         if not recs:
             continue
         cl = np.array([float(r["cleared"]) for r in recs])
         en = np.array([float(r["energy_J"]) for r in recs])
         ok = cl > 0.5
-        data.setdefault(w, []).append(
-            (h, cl.mean(), en[ok].mean() if ok.any() else np.nan, len(recs)))
-    if not data:
-        sys.exit("nothing matched %r (expected names like climb_wE2_h5.csv)" % a.pattern)
+        row = (h, cl.mean(), en[ok].mean() if ok.any() else np.nan, len(recs))
+        (pid if w is None else data.setdefault(w, [])).append(row)
+    if not data and not pid:
+        sys.exit("nothing matched %r (expected climb_wE2_h5.csv or climb_pid_h5.csv)"
+                 % a.pattern)
 
     fig, (ax, bx) = plt.subplots(1, 2, figsize=(7.6, 3.0))
     cmap = plt.cm.viridis(np.linspace(0.05, 0.88, len(data)))
@@ -68,6 +74,19 @@ def main():
         if good.any():
             bx.plot(np.array(h)[good], np.array(e)[good], "o-", ms=4, lw=1.6,
                     color=c, label="$w_E=%g$" % w)
+
+    if pid:
+        # Black dashed, deliberately distinct: this is the baseline the learned
+        # curves are being argued against, not another point in the sweep.
+        pid.sort()
+        ph = [q[0] for q in pid]
+        ax.plot(ph, [q[1] for q in pid], "s--", ms=4, lw=1.6, color="k",
+                label="PID baseline")
+        pe = np.array([q[2] for q in pid])
+        g = ~np.isnan(pe)
+        if g.any():
+            bx.plot(np.array(ph)[g], pe[g], "s--", ms=4, lw=1.6, color="k",
+                    label="PID baseline")
 
     ax.axvline(100 * a.r, color="crimson", ls="--", lw=1.2)
     ax.text(100 * a.r, 0.5, " $h_{\\max}=r$ ", color="crimson", fontsize=7.5,
@@ -95,6 +114,8 @@ def main():
     for w, pts in sorted(data.items()):
         for h, cl, en, n in sorted(pts):
             print("%-7g %-7d %-10.3f %-12s" % (w, h, cl, "n/a" if np.isnan(en) else "%.0f" % en))
+    for h, cl, en, n in sorted(pid):
+        print("%-7s %-7d %-10.3f %-12s" % ("PID", h, cl, "n/a" if np.isnan(en) else "%.0f" % en))
 
 
 if __name__ == "__main__":

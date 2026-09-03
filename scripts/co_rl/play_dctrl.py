@@ -58,6 +58,26 @@ parser.add_argument("--real-time", action="store_true", default=True, help="Run 
 parser.add_argument("--num_policy_stacks", type=int, default=2, help="Number of policy stacks.")
 parser.add_argument("--num_critic_stacks", type=int, default=2, help="Number of critic stacks.")
 parser.add_argument("--obs_latency_steps", type=int, default=0, help="Delay policy obs by N steps (0=no delay, 1=one-step latency).")
+# 2026-09-03: put the PID/decoupled baseline on the SAME axes as the learned
+# policies. eval_climb.py drives a checkpoint through OffPolicyRunner and cannot
+# run this controller, so rather than reimplement the baseline's navigation
+# logic elsewhere (and risk handicapping the thing we are comparing against),
+# the terrain pinning and the climb metric live here, around the controller that
+# actually gets cited.
+parser.add_argument("--step_height", type=float, default=None,
+                    help="pin every staircase to this riser height in metres, "
+                         "matching eval_climb.py, so baseline and policy are "
+                         "measured on identical terrain")
+parser.add_argument("--climb_episodes", type=int, default=0,
+                    help="run this many episodes recording the climb metric, "
+                         "write the CSV and exit (0 = normal interactive play)")
+parser.add_argument("--climb_out", type=str, default="climb_pid.csv")
+parser.add_argument("--climb_hold", type=float, default=0.5,
+                    help="seconds the height gain must be held; this is what "
+                         "separates climbing from a thrust-driven altitude spike")
+parser.add_argument("--climb_min_xy", type=float, default=0.35,
+                    help="metres of horizontal displacement required, so "
+                         "hovering above the spawn platform does not count")
 parser.add_argument(
     "--plot_velocity",
     action="store_true",
@@ -297,6 +317,17 @@ def main():
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
+    if args_cli.step_height is not None:
+        # Same override as eval_climb.py: collapse step_height_range to one
+        # value and switch the curriculum off, so difficulty is known and equal.
+        _tg = env_cfg.scene.terrain.terrain_generator
+        _tg.curriculum = False
+        _tg.num_rows, _tg.num_cols = 1, 5
+        _tg.use_cache = False
+        _k = next(k for k in _tg.sub_terrains if "stair" in k)
+        _tg.sub_terrains[_k].step_height_range = (args_cli.step_height, args_cli.step_height)
+        print("[climb] staircase pinned at %.3f m (%s)" % (args_cli.step_height, _k), flush=True)
+
     agent_cfg: CoRlPolicyRunnerCfg = cli_args.parse_co_rl_cfg(args_cli.task, args_cli)
     agent_cfg.num_policy_stacks = args_cli.num_policy_stacks if args_cli.num_policy_stacks is not None else agent_cfg.num_policy_stacks
     agent_cfg.num_critic_stacks = args_cli.num_critic_stacks if args_cli.num_critic_stacks is not None else agent_cfg.num_critic_stacks
@@ -686,6 +717,24 @@ def main():
     timestep = 0
     start_time = time.time()
 
+    # climb metric state (only used with --climb_episodes)
+    _cl_rows = []
+    _cl_on = args_cli.climb_episodes > 0
+    if _cl_on:
+        import csv as _csv
+        _cl_base = env.unwrapped
+        _cl_robot = _cl_base.scene["robot"]
+        _cl_spawn = _cl_robot.data.root_pos_w.clone()
+        _cl_hold_steps = max(1, int(args_cli.climb_hold / _cl_base.step_dt))
+        _cl_up_th = 0.8 * (args_cli.step_height or 0.05)
+        _cl_run = 0
+        _cl_cleared = False
+        _cl_maxgain = 0.0
+        _cl_steps = 0
+        print("[climb] recording %d episodes -> %s (hold %d steps, up %.3f m)"
+              % (args_cli.climb_episodes, args_cli.climb_out, _cl_hold_steps, _cl_up_th),
+              flush=True)
+
     # Policy I/O logging for env 0
     policy_io_file = None
     policy_io_writer = None
@@ -919,7 +968,38 @@ def main():
         ramp = min(1.0, env._mpc_step_count / 100.0)
         actions = actions * ramp
 
-        obs, _, _, extras = env.step(actions)
+        obs, _, _cl_dones, extras = env.step(actions)
+
+        if _cl_on:
+            _p = _cl_robot.data.root_pos_w
+            _cl_steps += 1
+            _gain = float(_p[0, 2] - _cl_spawn[0, 2])
+            _cl_maxgain = max(_cl_maxgain, _gain)
+            _disp = float(torch.norm(_p[0, :2] - _cl_spawn[0, :2]))
+            _cl_run = _cl_run + 1 if _gain >= _cl_up_th else 0
+            if _cl_run >= _cl_hold_steps and _disp >= args_cli.climb_min_xy:
+                _cl_cleared = True
+            if float(_cl_dones[0]) > 0.5:
+                _cl_rows.append({
+                    "cleared": int(_cl_cleared),
+                    "max_gain_m": round(_cl_maxgain, 4),
+                    "energy_J": round(float(_cl_base.episode_energy_buf[0]), 2),
+                    "steps": int(_cl_steps),
+                })
+                print("\r[climb] %d/%d" % (len(_cl_rows), args_cli.climb_episodes),
+                      end="", flush=True)
+                _cl_spawn = _p.clone()
+                _cl_run, _cl_cleared, _cl_maxgain, _cl_steps = 0, False, 0.0, 0
+                if len(_cl_rows) >= args_cli.climb_episodes:
+                    with open(args_cli.climb_out, "w", newline="") as _f:
+                        _w = _csv.DictWriter(_f, fieldnames=list(_cl_rows[0].keys()))
+                        _w.writeheader()
+                        _w.writerows(_cl_rows)
+                    _frac = sum(r["cleared"] for r in _cl_rows) / len(_cl_rows)
+                    print("\nwrote %s   cleared %.0f%% of %d episodes at h=%.0f cm"
+                          % (args_cli.climb_out, 100 * _frac, len(_cl_rows),
+                             100 * (args_cli.step_height or 0.0)), flush=True)
+                    break
 
         yaw = float(np.arctan2(2*(w*qz + qx*qy), 1 - 2*(qy*qy + qz*qz)))
         ang_vel_yaw = ang_vel[2].item()

@@ -203,6 +203,23 @@ class OffPolicyRunner:
 
         start_iter = self.current_learning_iteration
         tot_iter = start_iter + num_learning_iterations
+
+        # DOUBLEBEE_LOG_INTERVAL: log() is called EVERY iteration and, measured
+        # 2026-09-03 at 1024 envs, costs ~0.9 s of a 1.91 s iteration -- 0.41 s
+        # aggregating ep_infos (48 keys, each a GPU->CPU sync) plus 0.49 s of
+        # writer calls. That is ~47% of training time spent writing scalars
+        # nobody reads at per-iteration resolution.
+        #
+        # Logging every Nth iteration keeps the curves intact: ep_infos are
+        # cleared only when they are consumed, so the skipped iterations
+        # accumulate and are aggregated into the next log point. Only the x
+        # resolution of the TensorBoard traces drops.
+        #
+        # Default 1 = previous behaviour exactly. Set 5 for the ~2x speedup.
+        self._db_log_every = max(1, int(os.environ.get("DOUBLEBEE_LOG_INTERVAL", 1)))
+        if self._db_log_every > 1:
+            print("[runner] logging every %d iterations (DOUBLEBEE_LOG_INTERVAL)"
+                  % self._db_log_every, flush=True)
         for it in range(start_iter, tot_iter):
             start = time.time()
             # Rollout
@@ -285,15 +302,26 @@ class OffPolicyRunner:
             self._iter_wall_prev = _wall_now
             self.current_learning_iteration = it
             _t_a = time.time()
-            if self.log_dir is not None:
+            _do_log = (self._db_log_every <= 1
+                       or it % self._db_log_every == 0
+                       or it == tot_iter - 1)
+            if self.log_dir is not None and _do_log:
                 self.log(locals())
+            elif self.log_dir is not None:
+                # log() owns this accounting; keep it correct while skipping,
+                # or tot_timesteps and the ETA silently stop advancing.
+                self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
+                self.tot_time += collection_time + learn_time
             _t_b = time.time()
             if it % self.save_interval == 0:
                 self.save(os.path.join(self.log_dir, f"model_{it}.pt"))
             _t_c = time.time()
             self._t_log_call = _t_b - _t_a
             self._t_save_call = _t_c - _t_b
-            ep_infos.clear()
+            # Clear ONLY when consumed, so skipped iterations accumulate into
+            # the next log point instead of being thrown away.
+            if _do_log:
+                ep_infos.clear()
             if it == start_iter:
                 # obtain all the diff files
                 git_file_paths = store_code_state(self.log_dir, self.git_status_repos)

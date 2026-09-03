@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+import os
 import torch
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -389,6 +390,34 @@ class DoubleBeeHybridStairCfg(DoubleBeeVelocityEnvCfg):
     def __post_init__(self):
         # Call parent post_init
         super().__post_init__()
+
+        # DOUBLEBEE_NO_DR=1 turns domain randomization off.
+        #
+        # 2026-09-03, measured: mean episode length at iterations 300-400 was
+        # 36.0-39.2 across six runs WITHOUT randomization (baseline_4000 and the
+        # five 09-01 sweep arms) and 23.5-25.6 across five runs WITH it. Zero
+        # overlap, both clusters tight, so the effect is systematic rather than
+        # seed noise. At 24 steps the robot falls in 0.45 s and cannot reach a
+        # target sampled 0.5-1.2 m away, which starves every downstream signal.
+        #
+        # The hardware climb of 11 cm over two risers (2026-08-27) used
+        # baseline_4000, trained with randomization OFF, so transfer on this
+        # platform is already demonstrated without it.
+        #
+        # Only the seven randomization terms are removed. reset_base,
+        # reset_robot_joints and propeller_aerodynamics stay, since those are
+        # environment setup rather than randomization.
+        if os.environ.get("DOUBLEBEE_NO_DR", "0") not in ("0", "", "false", "False"):
+            _dr_terms = (
+                "sample_thrust_scale_dr", "randomize_robot_mass", "randomize_com",
+                "push_robot", "randomize_joint_actuator_gains",
+                "randomize_servo_actuator_gains", "randomize_friction",
+            )
+            _off = [t for t in _dr_terms if getattr(self.events, t, None) is not None]
+            for _t in _off:
+                setattr(self.events, _t, None)
+            print("[cfg] domain randomization DISABLED (DOUBLEBEE_NO_DR): "
+                  + ", ".join(_off), flush=True)
         
         # Override scene settings - keep prim_path consistent with sensors
         # Use Doublebee (not Robot) to match the actual robot name
