@@ -103,6 +103,12 @@ def main():
     env = gym.make(a.task, cfg=env_cfg)
     from isaaclab_tasks.utils import load_cfg_from_registry
     agent_cfg = load_cfg_from_registry(a.task, "co_rl_tqc_cfg_entry_point")
+    # This task is a ManagerBasedConstraintRLEnv, so terminated/truncated come
+    # back as FLOAT tensors. The wrapper picks `terminated | truncated` unless
+    # use_constraint_rl is set, and bitwise-or is not defined for floats --
+    # "bitwise_or_cuda not implemented for 'Float'". play.py sets this flag at
+    # line 330 for the same reason.
+    agent_cfg.use_constraint_rl = True
     env = CoRlVecEnvWrapper(env, agent_cfg)
     runner = OffPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     runner.load(os.path.abspath(a.checkpoint))
@@ -129,7 +135,7 @@ def main():
             zmax = torch.maximum(zmax, z)
             succ = goal_reached(env.unwrapped, distance_threshold=0.25)
 
-            fin = dones.nonzero(as_tuple=False).flatten()
+            fin = (dones > 0.5).nonzero(as_tuple=False).flatten()
             for i in fin.tolist():
                 done_rows.append({
                     "success": float(succ[i].item()),
