@@ -100,6 +100,19 @@ def main():
                         "plot in full. Guards the reset spread near 2.0.")
     p.add_argument("--window", type=int, default=500,
                    help="headline statistic is the mean over the final N iterations")
+    p.add_argument("--units", choices=["cm", "level"], default="cm",
+                   help="y axis of panel (a). 'cm' converts terrain level to "
+                        "riser height, which is affine in the level and lets the "
+                        "h_max = r line be drawn. 'level' keeps raw curriculum units.")
+    p.add_argument("--r", type=float, default=0.058,
+                   help="wheel radius in m. Sets h_max = r, the geometric climbing "
+                        "limit: above it the step edge is higher than the axle and "
+                        "no torque or thrust rolls the wheel over. TAPE MEASUREMENT, "
+                        "5.5-6.0 cm. The demotion argument rests on it, so measure it.")
+    p.add_argument("--r-lo", type=float, default=0.055, help="low end of the r estimate, m")
+    p.add_argument("--start-iter", type=int, default=50,
+                   help="clip the PLOT here. The reset spike to ~2.0 is not data and "
+                        "eats half the vertical range. Scoring is unaffected.")
     p.add_argument("--energy-tag", default=None)
     p.add_argument("--list-tags", action="store_true")
     a = p.parse_args()
@@ -108,11 +121,22 @@ def main():
     if not want:
         sys.exit("--panels must contain at least one of a, b, c")
 
-    runs = []
+    # A resumed run writes a NEW timestamped directory whose TB steps continue
+    # from the parent's last iteration (learn() does start_iter =
+    # current_learning_iteration). So one weight can span several directories;
+    # collect them all and concatenate by step. Suffix after the weight is free
+    # form, e.g. "_wE0p25_ext".
+    byw = {}
     for d in sorted(glob.glob(os.path.join(a.root, "*_wE*"))):
-        m = re.search(r"_wE([0-9p]+)$", os.path.basename(d))
+        m = re.search(r"_wE([0-9p]+)(?:_.*)?$", os.path.basename(d))
         if not m or not os.path.isdir(d):
             continue
+        byw.setdefault(float(m.group(1).replace("p", ".")), []).append(d)
+
+    runs = []
+    for w, dirs in byw.items():
+      xs, ys, exs, eys, etag = [], [], [], [], None
+      for d in sorted(dirs):
         ea, tags = load(d)
         if a.list_tags:
             print("scalar tags in %s:" % os.path.basename(d))
@@ -122,15 +146,29 @@ def main():
         _, x, y = series(ea, tags, "terrain_levels")
         if x is None:
             continue
-        etag = ex = ey = None
+        xs.append(x); ys.append(y)
         if a.energy_tag:
             if a.energy_tag in tags:
                 pts = ea.Scalars(a.energy_tag)
-                etag, ex = a.energy_tag, np.array([q.step for q in pts], float)
-                ey = np.array([q.value for q in pts], float)
+                etag = a.energy_tag
+                exs.append(np.array([q.step for q in pts], float))
+                eys.append(np.array([q.value for q in pts], float))
         else:
-            etag, ex, ey = series(ea, tags, "energy")
-        runs.append([float(m.group(1).replace("p", ".")), x, y, etag, ex, ey])
+            t_, ex_, ey_ = series(ea, tags, "energy")
+            if ex_ is not None:
+                etag = t_; exs.append(ex_); eys.append(ey_)
+      if not xs:
+          continue
+      x = np.concatenate(xs); y = np.concatenate(ys)
+      o = np.argsort(x, kind="stable"); x, y = x[o], y[o]
+      ex = ey = None
+      if exs:
+          ex = np.concatenate(exs); ey = np.concatenate(eys)
+          o = np.argsort(ex, kind="stable"); ex, ey = ex[o], ey[o]
+      if len(dirs) > 1:
+          print("w_E=%g stitched from %d dirs, iters %d-%d"
+                % (w, len(dirs), int(x.min()), int(x.max())))
+      runs.append([w, x, y, etag, ex, ey])
     if not runs:
         sys.exit("no *_wE* runs with terrain_levels under %s" % a.root)
     runs.sort(key=lambda r: r[0])
@@ -151,10 +189,13 @@ def main():
     stats, cplot = [], []
     for (w, x, y, etag, ex, ey), c in zip(runs, cmap):
         if "a" in P:
+            conv = step_cm if a.units == "cm" else (lambda v: v)
+            vis = x >= a.start_iter
             # raw underneath at low alpha: the smoothed line alone would read as
             # a settled plateau where the run is in fact oscillating.
-            P["a"].plot(x, y, lw=0.6, color=c, alpha=0.25)
-            P["a"].plot(x, smooth(y), lw=1.7, color=c, label="$w_E=%g$" % w)
+            P["a"].plot(x[vis], conv(y[vis]), lw=0.6, color=c, alpha=0.25)
+            P["a"].plot(x[vis], conv(smooth(y)[vis]), lw=1.7, color=c,
+                        label="$w_E=%g$" % w)
         late = x >= a.min_iter
         tail = x >= (x.max() - a.window)
         if not late.any():
@@ -182,9 +223,16 @@ def main():
 
     if "a" in P:
         ax = P["a"]
-        ax.axvspan(0, a.min_iter, color="0.88", zorder=0)
+        if a.units == "cm":
+            # The geometric wall. h_max = r, so the curriculum promoting a run
+            # above this band is promoting it into terrain that cannot be
+            # climbed at any torque -- which is what the demotions are.
+            ax.axhspan(100 * a.r_lo, 100 * a.r, color="crimson", alpha=0.10, zorder=0)
+            ax.axhline(100 * a.r, color="crimson", ls="--", lw=1.2, zorder=1)
+            ax.text(0.985, 100 * a.r, " $h_{\max}=r$ ", transform=ax.get_yaxis_transform(),
+                    ha="right", va="bottom", fontsize=7.5, color="crimson")
         ax.set_xlabel("iteration")
-        ax.set_ylabel("terrain level")
+        ax.set_ylabel("riser height (cm)" if a.units == "cm" else "terrain level")
         ax.grid(alpha=0.3)
         ax.legend(fontsize=7.5, loc="upper right", frameon=False, ncol=2,
                   columnspacing=1.0, handlelength=1.4)
