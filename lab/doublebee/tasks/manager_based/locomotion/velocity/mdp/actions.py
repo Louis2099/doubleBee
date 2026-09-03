@@ -797,6 +797,22 @@ class ActionsCfgWheelsOnly4D(ActionsCfg4D):
 
 
 @configclass
+class ActionsCfg4DPropellerOnly(ActionsCfg4D):
+    """4D action config with NO wheel actuation: propellers and servos only.
+
+    The flying arm of the actuation ablation. Thrust-to-weight is 1.16, so the
+    robot can fly, but only just, and with the wheels inert it has no yaw
+    authority at all (the propeller pair is tied, so there is no differential
+    thrust either). Expect it to succeed inefficiently rather than to fail:
+    the earlier comparison put it near 30 percent success at roughly four times
+    the hybrid policy's energy, which is the number the abstract's
+    "4x lower energy than propeller-only flight" refers to.
+    """
+
+    wheel_vel = None
+
+
+@configclass
 class ActionsCfg4DConstantThrust(ActionsCfg4D):
     """ActionsCfg4D with the propellers pinned. The fixed-allocation baseline.
 
