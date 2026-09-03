@@ -342,9 +342,23 @@ def goal_reached(
     # --- height check ---
     robot_z = robot.data.root_pos_w[:, 2]
     if hasattr(command_term, "current_targets_w"):
-        target_z = command_term.current_targets_w[:, 2]
+        # velocity_command.py:166 adds +0.3 m to the stored target z, for
+        # visualisation only -- the comment there still says "rewards/constraints
+        # use XY only, so Z doesn't matter", which stopped being true when this
+        # height criterion was added. Reading that inflated z means a robot
+        # standing EXACTLY on the target computes height_diff ~= 0.24 and fails
+        # `< 0.15`, so arriving at the goal never terminates the episode. Only
+        # over-climbing it by 15 cm does. Observed 2026-09-03 in play: the robot
+        # drives through the target without terminating, and every evaluated
+        # policy scored 0.000 success despite w_E=2 reporting 0.538 in training.
+        #
+        # The test is also two-sided now. `height_diff < 0.15` alone is satisfied
+        # by any robot ABOVE the target, however far above, which is the same
+        # mistake in the other direction.
+        TARGET_Z_VIS_OFFSET = 0.3
+        target_z = command_term.current_targets_w[:, 2] - TARGET_Z_VIS_OFFSET
         height_diff = target_z - robot_z
-        at_height = height_diff < 0.15
+        at_height = height_diff.abs() < 0.15
     else:
         # no target Z available — skip height check
         at_height = torch.ones(env.num_envs, device=env.device, dtype=torch.bool)
