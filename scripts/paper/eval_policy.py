@@ -111,6 +111,11 @@ def main():
     agent_cfg.use_constraint_rl = True
     env = CoRlVecEnvWrapper(env, agent_cfg)
     runner = OffPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    # Print it: on 2026-09-03 a shell one-liner sorting full paths on "_"
+    # silently selected model_999 over model_4000 (tied timestamp field, then
+    # string compare where '9' > '4'), and all five arms were evaluated a
+    # thousand iterations before they had learned anything. Use `ls -v`.
+    print("[eval] loading %s" % os.path.abspath(a.checkpoint), flush=True)
     runner.load(os.path.abspath(a.checkpoint))
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
