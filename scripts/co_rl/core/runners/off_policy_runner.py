@@ -288,8 +288,25 @@ class OffPolicyRunner:
             # collection first, about 15 s). Costs nothing, and the first
             # gradient then sees a representative sample of the NEW dynamics.
             if self.alg.buffer.size > int(os.environ.get("DOUBLEBEE_WARMUP_STEPS", 50000)):
-                self.alg.update(update_cnt=self.num_steps_per_env)
-                self._grad_steps = getattr(self, "_grad_steps", 0) + self.num_steps_per_env
+                # DOUBLEBEE_UPDATE_CNT: gradient steps per iteration. Default is
+                # num_steps_per_env (24), which makes learning independent of
+                # num_envs -- at 1024 envs that is 24576 fresh transitions per
+                # iteration feeding 24 updates, a ~1000:1 data-to-update ratio
+                # where off-policy methods normally sit near 1:1.
+                #
+                # Measured 2026-09-03: collection 1.28 s, learning 0.83 s for
+                # those 24 updates. So a gradient step costs 88 ms wall clock
+                # but only 35 ms of gradient; the rest is amortised collection.
+                # Raising this pushes the cost per gradient step toward 35 ms
+                # WITHOUT simulating more, which is the right lever when
+                # collection is launch-bound rather than env-count-bound.
+                #
+                # It also raises the replay ratio, so a value far above 24 risks
+                # over-fitting the buffer. 48 is a reasonable first step; verify
+                # critic loss does not diverge before going higher.
+                _upd = int(os.environ.get("DOUBLEBEE_UPDATE_CNT", self.num_steps_per_env))
+                self.alg.update(update_cnt=_upd)
+                self._grad_steps = getattr(self, "_grad_steps", 0) + _upd
 
             stop = time.time()
             learn_time = stop - start
