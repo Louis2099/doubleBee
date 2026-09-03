@@ -12,6 +12,20 @@ from isaaclab.envs.mdp.commands.commands_cfg import UniformVelocityCommandCfg
 from isaaclab.envs.mdp import UniformVelocityCommand
 from isaaclab.utils import configclass
 
+# How far ABOVE the true target the debug marker is drawn, metres.
+#
+# 2026-09-03: was 0.3, and that number cost a full day of misdiagnosis. The
+# marker floats above the real goal, so at the ~17 deg camera elevation used in
+# play it appears displaced ~0.97 m horizontally. The robot looks like it is
+# driving through the ball while actually sitting ~1 m short, which matches the
+# measured median closest approach of 0.972 m exactly. 0.05 m clears the terrain
+# mesh without meaningfully displacing the marker.
+#
+# constraints.py imports THIS constant. The two must never drift apart: when
+# they did, at_height compared the robot against a target 0.3 m too high and
+# rejected arrivals that were correct.
+TARGET_Z_VIS_OFFSET = 0.05
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
 
@@ -108,7 +122,19 @@ class TerrainTargetDirectionCommand(UniformVelocityCommand):
         # Store current target positions for each environment (in world frame)
         # Shape: [num_envs, 3] - will be set in _resample_command
         self.current_targets_w = torch.zeros(self.num_envs, 3, device=self.device)
-        
+
+        # 2026-09-03: WIDEN THE COMMAND FROM 3 TO 4. The base class allocates
+        # (num_envs, 3): direction x, direction y, heading error. _update_command
+        # computes distance_xy and then divides it out to normalise the direction,
+        # so RANGE NEVER REACHED THE POLICY. reach_terrain_target (w=5.0) and
+        # terminal_goal_reached (w=10.0) both depend on distance, and
+        # goal_reached needs arrival within 0.25 m, but the observation carried
+        # only a bearing. A policy cannot learn to stop at a distance it cannot
+        # perceive; measured median closest approach was 0.972 m, and in play the
+        # robot drives along the bearing and past the target without stopping.
+        # Channel 3 is that missing range.
+        self.vel_command_b = torch.zeros(self.num_envs, 4, device=self.device)
+
         # Initialize targets for all environments
         all_env_ids = torch.arange(self.num_envs, device=self.device)
         self._resample_command(all_env_ids)
@@ -163,7 +189,7 @@ class TerrainTargetDirectionCommand(UniformVelocityCommand):
         # at various heights. Since we can't query the actual terrain height here, we use
         # a fixed offset that approximates the average step height.
         # Note: This only affects visualization - rewards/constraints use XY only, so Z doesn't matter
-        target_world[:, 2] += 0.3
+        target_world[:, 2] += TARGET_Z_VIS_OFFSET
 
         self.current_targets_w[idx, :] = target_world
 
@@ -255,6 +281,15 @@ class TerrainTargetDirectionCommand(UniformVelocityCommand):
         self.vel_command_b[:, 0] = direction_x_body  # lin_vel_x in body frame
         self.vel_command_b[:, 1] = direction_y_body  # lin_vel_y in body frame
         self.vel_command_b[:, 2] = ang_vel_z_command  # ang_vel_z: normalized angle error to face target
+
+        # Channel 3: XY range to target, in [0, 1]. Scaled by MAX_RANGE_M and
+        # clipped so it matches the unit scale of the other three channels;
+        # targets are sampled 0.5-1.2 m away (stair_config.py), so 2.0 m keeps
+        # the whole sampled range on the linear part with headroom. The
+        # goal_reached threshold of 0.25 m sits at 0.125 here, which is well
+        # inside what a tanh-saturating network resolves.
+        MAX_RANGE_M = 2.0
+        self.vel_command_b[:, 3] = torch.clamp(distance_xy / MAX_RANGE_M, 0.0, 1.0)
         # Note: lin_vel_z is not included in 3D format (original training didn't use it)
         
         # NOTE: Target is NOT resampled here. It stays fixed for the entire episode.

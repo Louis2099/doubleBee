@@ -355,7 +355,9 @@ def goal_reached(
         # The test is also two-sided now. `height_diff < 0.15` alone is satisfied
         # by any robot ABOVE the target, however far above, which is the same
         # mistake in the other direction.
-        TARGET_Z_VIS_OFFSET = 0.3
+        from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.velocity_command import (
+            TARGET_Z_VIS_OFFSET,
+        )
         target_z = command_term.current_targets_w[:, 2] - TARGET_Z_VIS_OFFSET
         height_diff = target_z - robot_z
         at_height = height_diff.abs() < 0.15
