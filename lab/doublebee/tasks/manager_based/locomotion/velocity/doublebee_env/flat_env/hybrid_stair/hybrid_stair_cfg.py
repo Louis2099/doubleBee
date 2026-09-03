@@ -21,7 +21,12 @@ from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.rewards import Re
 from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.stair_config import StairConfigCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.velocity_command import TerrainTargetDirectionCommandCfg
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfg4D
-from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfg4DConstantThrust
+from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import (
+    ActionsCfg4DConstantThrust,
+    ActionsCfg4DPropellerOnly,
+    ActionsCfgWheelsOnly4D,
+    ActionsCfgWheelsServosOnly4D,
+)
 
 
 # Note: Using RewardsCfg from mdp/rewards.py instead of local DoubleBeeRewardsCfg
@@ -471,3 +476,44 @@ class DoubleBeeHybridStairConstantThrustCfg(DoubleBeeHybridStairCfg):
     """
 
     actions: ActionsCfg4DConstantThrust = ActionsCfg4DConstantThrust()
+
+
+@configclass
+class DoubleBeeHybridStairWheelsOnlyCfg(DoubleBeeHybridStairCfg):
+    """ACTUATION ABLATION: wheels only. Servos and propellers are inert.
+
+    The empirical half of the claim derived in the actuation-authority analysis:
+    a wheel meeting a riser needs 0.95 N.m against the 0.51 N.m the motors
+    deliver, so the geometry is unreachable by ground drive. That is a statics
+    argument; this arm measures it. Expect near-zero success while the policy
+    still balances competently between obstacles.
+    """
+
+    actions: ActionsCfgWheelsOnly4D = ActionsCfgWheelsOnly4D()
+
+
+@configclass
+class DoubleBeeHybridStairWheelsServosCfg(DoubleBeeHybridStairCfg):
+    """ACTUATION ABLATION: wheels and tilt servos, no thrust.
+
+    Separates TILT from THRUST. The servos can still redirect a thrust vector
+    that does not exist, so if climbing needs force rather than attitude this
+    arm fails alongside wheels-only; if attitude alone buys traction at a riser,
+    it does not. Nothing in the literature separates these two for a hybrid
+    platform, and it is the arm that answers "is it the thrust or the tilting?".
+    """
+
+    actions: ActionsCfgWheelsServosOnly4D = ActionsCfgWheelsServosOnly4D()
+
+
+@configclass
+class DoubleBeeHybridStairPropellerOnlyCfg(DoubleBeeHybridStairCfg):
+    """ACTUATION ABLATION: propellers and servos, wheels inert. The flying arm.
+
+    Supplies the denominator for the abstract's "4x lower energy than
+    propeller-only flight". T/W is 1.16, so flight is possible but marginal, and
+    with the wheels inert and the propeller pair tied there is no yaw authority
+    at all. Read a noisy success curve as that limitation rather than as a bug.
+    """
+
+    actions: ActionsCfg4DPropellerOnly = ActionsCfg4DPropellerOnly()

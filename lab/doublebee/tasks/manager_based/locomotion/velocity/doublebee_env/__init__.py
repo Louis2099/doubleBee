@@ -8,7 +8,12 @@
 import gymnasium as gym
 
 from . import agents
-from .flat_env.hybrid_stair.hybrid_stair_cfg import DoubleBeeHybridStairCfg, DoubleBeeHybridStairCfg_PLAY, DoubleBeeHybridStairConstantThrustCfg
+from .flat_env.hybrid_stair.hybrid_stair_cfg import (
+    DoubleBeeHybridStairCfg, DoubleBeeHybridStairCfg_PLAY, DoubleBeeHybridStairConstantThrustCfg,
+    DoubleBeeHybridStairWheelsOnlyCfg,
+    DoubleBeeHybridStairWheelsServosCfg,
+    DoubleBeeHybridStairPropellerOnlyCfg,
+)
 from .flat_env.inverted_pendulum import DoubleBeeInvertedPendulumCfg, DoubleBeeInvertedPendulumCfg_PLAY
 from .velocity_env_cfg import DoubleBeeVelocityEnvCfg
 
@@ -54,6 +59,52 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": DoubleBeeHybridStairConstantThrustCfg,
+        "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+    },
+)
+
+
+# ACTUATION ABLATION, 2026-09-02. Wheels only: the empirical half of the
+# statics argument that a 0.51 N.m drive cannot supply the 0.95 N.m a 6 cm
+# riser demands.
+gym.register(
+    id="Isaac-Velocity-HybridStair-DoubleBee-WheelsOnly-v1-ppo",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": DoubleBeeHybridStairWheelsOnlyCfg,
+        "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+    },
+)
+
+
+# ACTUATION ABLATION, 2026-09-02. Wheels and tilt servos, no thrust.
+# Separates TILT from THRUST: is the climb about force or attitude?
+gym.register(
+    id="Isaac-Velocity-HybridStair-DoubleBee-WheelsServos-v1-ppo",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": DoubleBeeHybridStairWheelsServosCfg,
+        "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+    },
+)
+
+
+# ACTUATION ABLATION, 2026-09-02. Propellers and servos, wheels inert.
+# The flying arm; supplies the denominator for the 4x energy claim.
+gym.register(
+    id="Isaac-Velocity-HybridStair-DoubleBee-PropellerOnly-v1-ppo",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": DoubleBeeHybridStairPropellerOnlyCfg,
         "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
         "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
         "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
