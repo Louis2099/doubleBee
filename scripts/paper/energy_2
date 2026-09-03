@@ -2,3 +2,6 @@ Energy in sim
 Metrics/energy/* comes from the same model as the reward, rewards.py:penalize_energy_consumption: propeller PWM → watts and wheel RPM → watts, both degree-4 fits to bench measurements, summed and multiplied by Δt. So the training objective and the reported metric are literally the same quantity — worth one sentence in the paper, since most energy-aware papers report a proxy.
 
 For hardware you measure it directly: ∫V·I dt from the power module, which is what the IROS submission did (356 J vs 571 J). Those are different instruments measuring the same thing, and agreement between them would be a genuine sim-to-real validation. Worth logging current and voltage on Sep 5.
+
+Option A: reframe, zero compute
+Report the bimodality instead of a correlation. "Escape from the flat-terrain optimum was all-or-nothing across runs; among six runs the two that escaped furthest carried the heaviest energy weights, and the heaviest run oscillated against the geometric limit $h_{\max}=r$." Every word of that is true and defensible. It costs you the headline but nothing else, and panel (a) with the $h_{\max}$ line still carries the section.
