@@ -305,8 +305,15 @@ def main():
         if not resume_path:
             print("[INFO] Unfortunately a pre-trained checkpoint is currently unavailable for this task.")
             return
-    # elif args_cli.checkpoint:
-    #     resume_path = retrieve_file_path(args_cli.checkpoint)
+    elif args_cli.checkpoint:
+        # 2026-09-03: re-enabled, same fix as play_dctrl.py. While commented out,
+        # --checkpoint was parsed but never used for resume_path, so the path you
+        # passed was fed to get_checkpoint_path as a GLOB and resolved against
+        # log_root_path -- producing "No checkpoints in the directory:
+        # '.../tqc/exported' match '.../model_3999.pt'". Pass the file you mean.
+        resume_path = os.path.abspath(os.path.expanduser(args_cli.checkpoint))
+        if not os.path.isfile(resume_path):
+            raise FileNotFoundError(f"--checkpoint not found: {resume_path}")
     else:
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
