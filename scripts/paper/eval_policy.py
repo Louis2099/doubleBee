@@ -119,39 +119,45 @@ def main():
     runner.load(os.path.abspath(a.checkpoint))
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
+    # The env already maintains episode_success_buf and episode_energy_buf per
+    # environment, latched DURING the episode and read at reset
+    # (manager_based_constraint_rl_env.py:515-536). Recomputing them after
+    # env.step() reads the POST-RESET state -- terminated envs have already been
+    # teleported to a fresh spawn -- which is why every episode scored 0.000
+    # success on 2026-09-03 despite w_E=2 reaching 0.538 in training. Read the
+    # env's buffers on the step the episode ends instead.
+    base = env.unwrapped
+    dev = base.device
     n = a.num_envs
-    dev = env.unwrapped.device
-    energy = torch.zeros(n, device=dev)
-    steps = torch.zeros(n, device=dev)
-    z0 = env.unwrapped.scene["robot"].data.root_pos_w[:, 2].clone()
+    z0 = base.scene["robot"].data.root_pos_w[:, 2].clone()
     zmax = z0.clone()
+    steps = torch.zeros(n, device=dev)
     done_rows = []
 
     obs, _ = env.get_observations()
     while len(done_rows) < a.episodes:
         with torch.inference_mode():
             obs, _, dones, _ = env.step(policy(obs))
-            # penalize_energy_consumption returns a NEGATIVE shaped penalty; the
-            # raw joules are recovered from the same power model it uses.
-            robot = env.unwrapped.scene["robot"]
-            energy += _step_joules(env, robot)
+            robot = base.scene["robot"]
             steps += 1
             z = robot.data.root_pos_w[:, 2]
             zmax = torch.maximum(zmax, z)
-            succ = goal_reached(env.unwrapped, distance_threshold=0.25)
 
             fin = (dones > 0.5).nonzero(as_tuple=False).flatten()
-            for i in fin.tolist():
+            for k in fin.tolist():
                 done_rows.append({
-                    "success": float(succ[i].item()),
-                    "energy_J": float(energy[i].item()),
-                    "climb_m": float((zmax[i] - z0[i]).item()),
-                    "steps": int(steps[i].item()),
+                    "success": float(base.episode_success_buf[k].item()),
+                    "energy_J": float(base.episode_energy_buf[k].item()),
+                    "climb_m": float((zmax[k] - z0[k]).item()),
+                    "steps": int(steps[k].item()),
                 })
-                energy[i] = 0.0
-                steps[i] = 0.0
-                z0[i] = z[i]
-                zmax[i] = z[i]
+                steps[k] = 0.0
+                z0[k] = z[k]
+                zmax[k] = z[k]
+            if fin.numel():
+                print("\r[eval] %d/%d episodes" % (len(done_rows), a.episodes),
+                      end="", flush=True)
+    print()
 
     with open(a.out, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["success", "energy_J", "climb_m", "steps"])
