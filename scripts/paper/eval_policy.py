@@ -116,7 +116,7 @@ def main():
     # string compare where '9' > '4'), and all five arms were evaluated a
     # thousand iterations before they had learned anything. Use `ls -v`.
     print("[eval] loading %s" % os.path.abspath(a.checkpoint), flush=True)
-    runner.load(os.path.abspath(a.checkpoint))
+    runner.load(os.path.abspath(a.checkpoint), load_optimizer=False)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     # The env already maintains episode_success_buf and episode_energy_buf per
