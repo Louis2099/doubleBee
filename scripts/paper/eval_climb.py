@@ -125,7 +125,7 @@ def main():
     env = CoRlVecEnvWrapper(env, agent_cfg)
     runner = OffPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     print("[climb] loading %s" % os.path.abspath(a.checkpoint), flush=True)
-    runner.load(os.path.abspath(a.checkpoint))
+    runner.load(os.path.abspath(a.checkpoint), load_optimizer=False)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     base = env.unwrapped
