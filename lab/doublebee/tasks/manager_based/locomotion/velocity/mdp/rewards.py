@@ -1556,6 +1556,50 @@ def reward_prop_thrust_when_climbing(env) -> torch.Tensor:
     # reward: spinning props HARD, pointed up, at a step = real upward assist
     return prop_speed_norm * z_frac * step_ahead
 
+
+# ---------------------------------------------------------------------------
+# DOUBLEBEE_REWARD_V2: rebalance task reward against posture reward.
+#
+# Measured 2026-09-03, iteration 326 (contribution = weight x mean value):
+#     posture   alive_upright 0.0572 + props_upright 0.0448
+#               + vertical_thrust_support 0.0156 + thrust_recovery 0.0217 = 0.139
+#     task      terminal_goal 0.0455 + reach_target 0.0213 + forward 0.0009
+#               + progress_to_target -0.0004 + climb -0.0024            = 0.065
+# Standing upright paid 2.1x what doing the task paid, which IS the
+# flat-ground local optimum the energy sweep kept rediscovering: a policy that
+# balances near the spawn and never attempts a riser collects most of the
+# available return.
+#
+# V2 halves the posture bloc and roughly triples the dense task term, landing
+# near 3:1 in favour of the task:
+#     posture 0.139 -> ~0.051    task 0.065 -> ~0.156
+#
+# Cutting posture reward is only safe BECAUSE the run is warm-started from a
+# policy that already balances (see scripts/paper/transplant_obs.py). From a
+# random init these terms are what bootstraps balance, and halving them there
+# would make the falling problem worse, not better.
+#
+# NOT changed: reward_progress_to_target sits at weight 10.0 and contributed
+# -0.0004, i.e. the underlying signal is ~0. Raising a weight on a zero signal
+# does nothing; that term needs investigating, not scaling.
+#
+# Default off, so every run before this stays reproducible.
+_REWARD_V2 = os.environ.get("DOUBLEBEE_REWARD_V2", "0") not in ("0", "", "false", "False")
+_V2_WEIGHTS = {
+    "reward_alive_upright": 0.5,              # was 2.0
+    "reward_props_upright": 2.0,              # was 5.0
+    "reward_vertical_thrust_support": 1.5,    # was 3.0
+    "reward_thrust_recovery_under_lean": 3.0, # was 6.0
+    "reach_terrain_target": 15.0,             # was 5.0
+    "terminal_goal_reached": 20.0,            # was 10.0
+}
+
+
+def _w(name, default):
+    """Reward weight, overridden when DOUBLEBEE_REWARD_V2 is set."""
+    return _V2_WEIGHTS[name] if (_REWARD_V2 and name in _V2_WEIGHTS) else default
+
+
 @configclass
 class RewardsCfg:
     """Reward specifications for DoubleBee velocity tracking task."""
@@ -1638,7 +1682,7 @@ class RewardsCfg:
     # terminal advantage of 1000 + 9(T-t), which finishing still wins comfortably.
     reach_terrain_target = RewTerm(
         func=reach_terrain_target,
-        weight=5.0,
+        weight=_w("reach_terrain_target", 5.0),
     )
     """Reward for reaching terrain target positions.
     Computes distance to nearest target patch from terrain.flat_patches['target'].
@@ -1735,7 +1779,7 @@ class RewardsCfg:
     terminal_goal_reached = RewTerm(
         func=terminal_reward_goal_reached,
         params={"alive_weight": 9.0, "terminal_weight": 10.0},
-        weight=10.0, # was 1.0
+        weight=_w("terminal_goal_reached", 10.0), # was 1.0
     )
     """Terminal reward for successfully reaching the goal.
     Returns +10.0 when robot reaches the goal (episode ends due to goal_reached constraint).
@@ -1941,7 +1985,7 @@ class RewardsCfg:
     # to be enough -- it is kept because it is correct, not because it is decisive.
     reward_props_upright = RewTerm(
         func=reward_props_upright,
-        weight=5.0,
+        weight=_w("reward_props_upright", 5.0),
     )
 
     # Added 2026-08-21. Rewards props pointing up *and pushing*, which is what
@@ -1986,7 +2030,7 @@ class RewardsCfg:
     # ALREADY 0.35 in that run -- it is not part of the revert.
     reward_vertical_thrust_support = RewTerm(
         func=reward_vertical_thrust_support,
-        weight=3.0,  # full; see the note above reward_props_upright
+        weight=_w("reward_vertical_thrust_support", 3.0),  # full; see the note above reward_props_upright
         params={"target_frac": 0.35},
     )
 
@@ -2005,7 +2049,7 @@ class RewardsCfg:
     # far worse than the one it risks.
     reward_thrust_recovery_under_lean = RewTerm(
         func=reward_thrust_recovery_under_lean,
-        weight=6.0,  # full; see the note above reward_props_upright
+        weight=_w("reward_thrust_recovery_under_lean", 6.0),  # full; see the note above reward_props_upright
         params={"lean_onset": 0.05},
     )
 
@@ -2068,7 +2112,7 @@ class RewardsCfg:
     # reached 34% success, so it is NOT the thing to change while reproducing.
     reward_alive_upright = RewTerm(
         func=reward_alive_upright,
-        weight=2.0,
+        weight=_w("reward_alive_upright", 2.0),
         params={"tol": 0.5},
     )
 
