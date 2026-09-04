@@ -1,0 +1,78 @@
+
+
+ reset_delta[0] = 0.0
+[SERVO] pos(rad)=0.016 min=-0.533 max=0.711
+[THRUST DIR] env0 z_frac=0.997 mean=0.958 min=0.280 max=1.000
+[SERVOLOOP] corr(spos,sact)=+0.188 corr(lean,sact)=+0.038 lag1_ac=+0.449 | spos mean=-0.041 sd=0.187 min=-0.533 max=+0.711 | sact mean=-0.034 sd=0.579
+[SERVOASYM] FWD-lean n=  90 corr(lean,sact)=+0.137 sact=-0.131 | BACK-lean n= 831 corr(lean,sact)=-0.019 sact=-0.010
+[BALANCE] corr(lean,wcmd)=-0.150 corr(rate,wcmd)=-0.089 corr(lean,wvel)=-0.101 corr(wcmd,wvel)=+0.441 | lean sd=0.152 roll sd=0.089 wcmd mean=-0.259 sd=0.634 wvel mean=-4.6 sd=6.8
+[action->thrust] step=500 env=0 | raw_action(policy)=[-0.16477975] | vel_target(rad/s)=[ 267.27048 -267.27048] | joint_vel(rad/s)=[ 152.8899  -152.23805] | vel_error(rad/s)=[ 114.380585 -115.032425] | PWM=[1198.7568 1197.9094] | thrust(N)=[5.58995836 5.57292806]
+################################################################################
+                       Learning iteration 20/4000                       
+
+                       Computation: 13906 steps/s (collection: 0.926s, learning 0.842s)
+                       Mean reward: 47.31
+               Mean episode length: 157.99
+                       Critic loss: 0.1722
+                        Actor loss: -6.8086
+              Alpha (entropy temp): 0.0019
+                       Buffer size: 516096
+                  Grad steps taken: 216
+              Metrics/success/rate: 0.2802
+Metrics/success/total_successful_trajectories: 188.0
+Metrics/success/total_trajectories: 671.0
+Metrics/energy/average_consumption: 601.1861
+Metrics/energy/successful_trajectories: 703.2312
+Episode_Reward/velocity_direction_alignment: 0.0048
+Episode_Reward/reach_terrain_target: 0.1446
+Episode_Reward/propeller_efficiency: -0.0015
+ Episode_Reward/energy_consumption: -0.8658
+Episode_Reward/penalize_facing_mismatch: -0.0091
+  Episode_Reward/penalize_rotation: -0.0792
+Episode_Reward/penalize_high_speed: -0.0001
+Episode_Reward/terminal_goal_reached: 2.3470
+Episode_Reward/terminal_propeller_collision: -0.0072
+Episode_Reward/terminal_robot_out_of_bounds: 0.0000
+  Episode_Reward/action_smoothness: -0.0014
+Episode_Reward/penalize_stalling_near_target: -0.0101
+      Episode_Reward/penalize_time: -0.0024
+Episode_Reward/penalize_thrust_pointing_down: 0.0000
+Episode_Reward/penalize_thrust_forward_at_step: -0.0021
+Episode_Reward/penalize_prolonged_no_progress: -0.0447
+  Episode_Reward/penalize_yaw_spin: -0.0238
+Episode_Reward/penalize_not_upright: -0.0158
+Episode_Reward/penalize_action_rate: -0.0188
+Episode_Reward/penalize_cross_track_error: -0.0070
+Episode_Reward/reward_climb_progress: 0.0052
+Episode_Reward/reward_forward_progress: 0.0023
+Episode_Reward/reward_progress_to_target: 0.0708
+Episode_Reward/reward_stable_after_climb: 0.0781
+Episode_Reward/reward_thrust_up_at_step: 0.1227
+Episode_Reward/reward_props_upright: 0.2066
+Episode_Reward/reward_vertical_thrust_support: 0.1219
+Episode_Reward/reward_thrust_recovery_under_lean: 0.0748
+Episode_Reward/reward_prop_thrust_when_climbing: 0.0458
+Episode_Reward/reward_prop_catch_when_falling: 0.0037
+Episode_Reward/reward_alive_upright: 0.3182
+         Curriculum/terrain_levels: 1.7724
+Metrics/base_velocity/error_vel_xy: 0.1243
+Metrics/base_velocity/error_vel_yaw: 0.0796
+       Episode_Constraint/time_out: 0.0000
+Episode_Constraint/propeller_collision: 1.3583
+   Episode_Constraint/goal_reached: 1.5667
+Episode_Constraint/robot_out_of_bounds: 0.0000
+           Episode_Constraint/tilt: 3.6500
+--------------------------------------------------------------------------------
+                   Total timesteps: 516096
+                    Iteration time: 1.77s
+                         Wall time: 22.63s  (untimed: 20.87s)
+                   log() breakdown: ep_infos 1.40s  keys 48  entries 120  | print 0.00s  logcall 0.00s  save 0.00s
+                        Total time: 27.44s
+                               ETA: 5201.3s
+
+[SERVO] pos(rad)=0.037 min=-0.566 max=0.640
+[THRUST DIR] env0 z_frac=0.607 mean=0.962 min=0.424 max=1.000
+[SERVOLOOP] corr(spos,sact)=+0.215 corr(lean,sact)=+0.092 lag1_ac=+0.422 | spos mean=-0.017 sd=0.190 min=-0.566 max=+0.640 | sact mean=-0.034 sd=0.587
+[SERVOASYM] FWD-lean n=  96 corr(lean,sact)=-0.136 sact=-0.168 | BACK-lean n= 844 corr(lean,sact)=+0.084 sact=-0.009
+[BALANCE] corr(lean,wcmd)=-0.265 corr(rate,wcmd)=-0.059 corr(lean,wvel)=-0.080 corr(wcmd,wvel)=+0.350 | lean sd=0.134 roll sd=0.096 wcmd mean=-0.332 sd=0.600 wvel mean=-6.2 sd=6.4
+
