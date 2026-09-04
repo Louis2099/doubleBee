@@ -62,10 +62,23 @@ def plot(counts, lean, rate, out):
                 "mean lean %.0f$\\degree$, %.1f rad/s" % (lean, rate),
                 xy=(0.98, 0.97), xycoords="axes fraction", va="top", ha="right",
                 fontsize=6.5, color="#b2182b")
+    # Sample size ON the figure. 2026-09-04: a run reported alpha = 4.00 that was
+    # 12 hits over 3 -- one extra success would have made it 3.0. A ratio with no
+    # n beside it is not reportable, so n travels with the plot.
+    ax.set_title("$n=%d$ strict successes" % allf, fontsize=7, loc="left", color="0.35")
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight")
     fig.savefig(os.path.splitext(out)[0] + ".png", dpi=220, bbox_inches="tight")
-    print("wrote %s (+ .png)" % out)
+    import json
+    with open(os.path.splitext(out)[0] + ".counts.json", "w") as f:
+        json.dump({"xy": xy, "xyz": xyz, "xyzu": xyzu, "all": allf,
+                   "lean_deg": lean, "rate_rad_s": rate}, f)
+    print("wrote %s (+ .png, + .counts.json)" % out)
+    if allf < 100:
+        print("\n*** n = %d strict successes. NOT REPORTABLE. alpha is a ratio of\n"
+              "*** small integers here; one more or fewer success moves it a lot.\n"
+              "*** Raise --steps and --num_envs until n >= 100, or pick a step\n"
+              "*** height where the policy actually succeeds." % allf)
     print("\nalpha = XY / all-four = %.2f  (a proximity-only metric reports %.0f%% more)"
           % (rel[0], 100 * (rel[0] - 1)))
     print("elevation removes %.0f%%, uprightness %.0f%%, settling %.0f%% of the inflation"
