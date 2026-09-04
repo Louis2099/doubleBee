@@ -80,6 +80,13 @@ def main():
     p.add_argument("--task", default="Isaac-Velocity-HybridStair-DoubleBee-Play-v1-ppo")
     p.add_argument("--steps", type=int, default=3000)
     p.add_argument("--num_envs", type=int, default=64)
+    p.add_argument("--step-height", dest="step_height", type=float, default=None,
+                   help="pin every staircase to this riser height in metres. On the "
+                        "easy end of the play terrain the goal sits at the robot's own "
+                        "height, so |dz| < 0.15 is satisfied for free and the elevation "
+                        "criterion removes nothing (measured 2026-09-04: XY 3846, +Z "
+                        "3846, identical). Pinning a tall riser is what makes the "
+                        "criteria separable.")
     p.add_argument("-o", "--out", default="fig_succ_ablation.pdf")
     p.add_argument("--from-counts", help="xy,xyz,xyzu,all -- plot without running sim")
     p.add_argument("--lean", type=float, default=float("nan"))
@@ -104,6 +111,14 @@ def main():
     from isaaclab_tasks.utils import parse_env_cfg, load_cfg_from_registry
 
     env_cfg = parse_env_cfg(a.task, num_envs=a.num_envs)
+    if a.step_height is not None:
+        tg = env_cfg.scene.terrain.terrain_generator
+        tg.curriculum = False
+        tg.num_rows, tg.num_cols = 1, 5
+        tg.use_cache = False
+        _k = next(k for k in tg.sub_terrains if "stair" in k)
+        tg.sub_terrains[_k].step_height_range = (a.step_height, a.step_height)
+        print("[succ] staircase pinned at %.3f m" % a.step_height, flush=True)
     env = gym.make(a.task, cfg=env_cfg)
     agent_cfg = load_cfg_from_registry(a.task, "co_rl_tqc_cfg_entry_point")
     agent_cfg.use_constraint_rl = True      # float terminated/truncated; see play.py:330
