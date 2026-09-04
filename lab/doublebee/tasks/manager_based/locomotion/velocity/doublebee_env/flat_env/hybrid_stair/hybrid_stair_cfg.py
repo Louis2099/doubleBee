@@ -197,26 +197,26 @@ class DoubleBeeEventsCfg:
     #     },
     # )
 
-    randomize_robot_mass = EventTerm(
-        func=randomize_rigid_body_mass,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=["body"]),  # main body only, not .*
-            "mass_distribution_params": (0.95, 1.05),  # ±5% scale
-            "operation": "scale",
-        },
-    )
+    # randomize_robot_mass = EventTerm(
+    #     func=randomize_rigid_body_mass,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=["body"]),  # main body only, not .*
+    #         "mass_distribution_params": (0.95, 1.05),  # ±5% scale
+    #         "operation": "scale",
+    #     },
+    # )
 
-    randomize_com = EventTerm(
-        func=mdp.randomize_com_positions,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=["body"]),
-            "com_distribution_params": (-0.01, 0.01),  # ±1cm COM offset
-            "operation": "add",
-            "distribution": "uniform",
-        },
-    ) # WASS 0.01
+    # randomize_com = EventTerm(
+    #     func=mdp.randomize_com_positions,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=["body"]),
+    #         "com_distribution_params": (-0.01, 0.01),  # ±1cm COM offset
+    #         "operation": "add",
+    #         "distribution": "uniform",
+    #     },
+    # ) # WASS 0.01
 
         # push_robot roll/pitch RAISED 0.05 -> 0.25 rad/s on 2026-08-25.
     #
@@ -252,42 +252,42 @@ class DoubleBeeEventsCfg:
         },
     )
 
-    randomize_joint_actuator_gains = EventTerm(
-        func=randomize_actuator_gains,
-        mode="startup",  # once at start, not every reset
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=["leftWheel", "rightWheel"]),
-            "stiffness_distribution_params": (0.8, 1.2),
-            "damping_distribution_params": (0.8, 1.2),
-            "operation": "scale",
-            "distribution": "log_uniform",
-        },
-    )
+    # randomize_joint_actuator_gains = EventTerm(
+    #     func=randomize_actuator_gains,
+    #     mode="startup",  # once at start, not every reset
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", joint_names=["leftWheel", "rightWheel"]),
+    #         "stiffness_distribution_params": (0.8, 1.2),
+    #         "damping_distribution_params": (0.8, 1.2),
+    #         "operation": "scale",
+    #         "distribution": "log_uniform",
+    #     },
+    # )
 
-    randomize_servo_actuator_gains = EventTerm(
-        func=randomize_actuator_gains,   # no mdp. prefix — imported from isaaclab.envs.mdp
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=["leftPropellerServo", "rightPropellerServo"]),
-            "stiffness_distribution_params": (0.8, 1.2),
-            "damping_distribution_params": (0.8, 1.2),
-            "operation": "scale",
-            "distribution": "log_uniform",
-        },
-    )
+    # randomize_servo_actuator_gains = EventTerm(
+    #     func=randomize_actuator_gains,   # no mdp. prefix — imported from isaaclab.envs.mdp
+    #     mode="startup",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", joint_names=["leftPropellerServo", "rightPropellerServo"]),
+    #         "stiffness_distribution_params": (0.8, 1.2),
+    #         "damping_distribution_params": (0.8, 1.2),
+    #         "operation": "scale",
+    #         "distribution": "log_uniform",
+    #     },
+    # )
 
-    randomize_friction = EventTerm(
-            func=mdp.randomize_rigid_body_material,
-            mode="reset",
-            params={
-                "asset_cfg": SceneEntityCfg("robot", body_names=["leftWheel", "rightWheel"]),
-                "static_friction_range": (0.8, 1.2),
-                "dynamic_friction_range": (0.7, 1.0),
-                "restitution_range": (0.0, 0.0),
-                "num_buckets": 64,
-                "make_consistent": True,  # keeps dynamic <= static
-            },
-        )
+    # randomize_friction = EventTerm(
+    #         func=mdp.randomize_rigid_body_material,
+    #         mode="reset",
+    #         params={
+    #             "asset_cfg": SceneEntityCfg("robot", body_names=["leftWheel", "rightWheel"]),
+    #             "static_friction_range": (0.8, 1.2),
+    #             "dynamic_friction_range": (0.7, 1.0),
+    #             "restitution_range": (0.0, 0.0),
+    #             "num_buckets": 64,
+    #             "make_consistent": True,  # keeps dynamic <= static
+    #         },
+    #     )
 
 @configclass
 class DoubleBeeEventsCfg_PLAY:
