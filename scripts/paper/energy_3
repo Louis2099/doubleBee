@@ -1,0 +1,2 @@
+The energy weight $w_E$ was swept over five values spanning the range from a negligible penalty to one comparable with the task reward. Because absolute weights are meaningful only relative to the reward scale, we characterise each setting by the fraction of task reward the energy term contributes, measured on the shared initialization: 0%, 5%, 13%, 27% and 53%.
+
