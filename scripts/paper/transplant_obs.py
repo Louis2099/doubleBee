@@ -13,13 +13,15 @@ WHY
   EXACTLY what it computed before (a zero column contributes nothing) while
   leaving the new input free to acquire weight during training.
 
-LAYOUT (from db_inference.py, one frame)
-    [0:2]   wheel_vel          [2:5]   base_lin_vel     [5:8]   base_ang_vel
-    [8:11]  projected_gravity  [11:27] height_scan      [27:29] wheel_contact
-    [29:32] velocity_commands  [32:38] actions
-  The new channel is appended to velocity_commands, so it lands at index 32 and
-  everything from the old index 32 onward shifts up by one. With
-  num_policy_stacks frames concatenated, that insertion repeats once per frame.
+LAYOUT (SIM, 40 dims -- authority is the docstring of ActionsCfg4D in
+mdp/actions.py; the 38-dim layout in db_inference.py is the DEPLOYMENT vector
+and is NOT the same thing)
+    [0:2]   wheel_vel      [2:4]   servo_pos      [4:6]   propeller_vel
+    [6:9]   lin_vel        [9:12]  ang_vel        [12:15] gravity
+    [15:31] height_scan    [31:33] contact        [33:36] command
+    [36:40] actions
+  The range channel is appended to the command block, so it lands at index 36
+  and the four action entries shift to [37:41]. One frame, no stacking.
 
 BIAS, STATED UP FRONT
   Warm-starting every w_E arm from one checkpoint trained at w_E=0.25 biases
@@ -59,11 +61,11 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--in", dest="src", required=True)
     p.add_argument("--out", dest="dst", required=True)
-    p.add_argument("--frame-old", type=int, default=38)
-    p.add_argument("--frame-new", type=int, default=39)
-    p.add_argument("--insert-at", type=int, default=32,
+    p.add_argument("--frame-old", type=int, default=40)
+    p.add_argument("--frame-new", type=int, default=41)
+    p.add_argument("--insert-at", type=int, default=36,
                    help="index WITHIN one frame where the new channel goes")
-    p.add_argument("--stacks", type=int, default=2, help="num_policy_stacks")
+    p.add_argument("--stacks", type=int, default=1, help="stacked frames in one obs vector")
     a = p.parse_args()
 
     old_obs = a.frame_old * a.stacks
