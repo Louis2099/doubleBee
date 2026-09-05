@@ -1,0 +1,28 @@
+Here's the list, grouped, with the ones I verified in the code just now marked.
+
+Observation and task
+Goal command 3 → 4 channels. It was a unit direction vector plus heading error, carrying no range. The policy could not perceive how far the target was, so it could not learn to stop; measured median closest approach was 0.972 m against a 0.25 m success threshold. Channel 3 is now XY range, clipped to [0,1] at 2.0 m. Observation width 40 → 41.
+Success criterion
+at_height was one-sided (height_diff < 0.15), so a robot hovering above the target passed. Now |height_diff| < 0.15. This is the bug that let a propellers-only policy score as a climber.
+Target marker offset 0.3 → 0.05 m, and now one shared constant. constraints.py kept its own copy of 0.3, and the two drifted, so at_height compared the robot against a target 0.3 m too high. At the play camera angle the 0.3 m offset also made the robot look like it was passing through the goal when it was ~1 m short.
+Success-criterion ablation instrumented: all four nested subsets counted on the same trajectories.
+Training protocol
+Domain randomization off. Measured: mean episode length 36–39 steps across six runs without it, 23.5–25.6 across five with it, zero overlap. The workshop paper's Table III listed nine randomizations of which seven were inactive anyway.
+Common warm start instead of independent cold starts. All arms initialise from one pretrained policy via a weight transplant that widens the input layer and zero-fills the new channel. This removes the initialisation variance that made the previous sweep unusable, where two runs with byte-identical configs finished at terrain level 1.18 and 0.04.
+TQC throughout, so sim and hardware describe the same algorithm. The workshop paper's hardware results came from a PPO checkpoint with a 22-dim observation and no height scan.
+Energy ablation
+Sweep is {0, 10, 25, 50, 100}, reported as the penalty's share of task reward (0%, 5%, 13%, 27%, 53%), not as raw weights.
+The previous sweep {0, 0.25, 1, 2, 4} is void. It spanned 0 to ~2% of task reward, so the term could not have changed behaviour, and it was scored through the broken success gate.
+Evaluation, all new
+Fixed-terrain climbing evaluation that decides "cleared a riser" from kinematics alone, never calling goal_reached, with a hold-time requirement that separates climbing from thrust-assisted flight.
+Success-criterion ablation: 4 and 5 cm risers agree within 7% over 69k samples; at 6 cm, proximity alone reports 9.1x, with uprightness accounting for 88% of the gap.
+Closed-loop wheel lag metric from flight logs.
+Sim2real constants (verified)
+SERVO_POS_LIMIT_RAD = π/4, was π/2 while its own comments claimed π/4.
+WHEEL_VEL_LIMIT_RAD_S = 23.6, measured. Was 200, then 35, both wrong.
+PROP_HALF_SPAN 187.5 → 320, matching sim. Deployment had been commanding 1.71x less propeller speed with --prop_scale silently absorbing it, which saturated everything above action −0.43 and turned smooth thrust modulation into a two-state switch.
+Measured wheel command-to-response lag: 300 ms at 0.43 amplitude, against a 102 ms fall time constant. New measurement, from mocap independent of the motor controller.
+Not yet done, worth flagging to them
+Deployment still builds a 40-dim observation, so none of the new checkpoints can be loaded on hardware until the range channel is added there. And the energy sweep hasn't been evaluated at matched difficulty yet, which is the number the title depends on.
+
+Want this as a shareable page instead of a wall of text?
