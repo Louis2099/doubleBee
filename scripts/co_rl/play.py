@@ -30,6 +30,21 @@ from scripts.co_rl.core.utils.analyzer import Analyzer
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with CO-RL.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
+# Camera placement for figures. Isaac Lab's default view is a fixed world-frame
+# eye, which loses the robot as it drives and is useless for a strip figure.
+# origin_type "asset_root" makes `eye` and `lookat` RELATIVE to the robot, so
+# the camera tracks it. Body frame here is X = right, Y = forward, Z = up, so a
+# side-on view (the one that shows a climb) looks along X.
+parser.add_argument("--cam_follow", action="store_true", default=False,
+                    help="camera tracks the robot instead of a fixed world pose")
+parser.add_argument("--cam_eye", type=float, nargs=3, default=[2.0, 0.0, 0.5],
+                    metavar=("X", "Y", "Z"),
+                    help="camera position. With --cam_follow this is relative to "
+                         "the robot: (2,0,0.5) is side-on from the robot's right, "
+                         "which is the view that shows a stair climb. (0,-2,0.5) "
+                         "is from behind, (2,-2,1) is a three-quarter view.")
+parser.add_argument("--cam_lookat", type=float, nargs=3, default=[0.0, 0.0, 0.0],
+                    metavar=("X", "Y", "Z"), help="camera target, same frame")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
@@ -320,6 +335,17 @@ def main():
     log_dir = os.path.dirname(resume_path)
 
     # create isaac environment
+    if args_cli.cam_follow or args_cli.cam_eye != [2.0, 0.0, 0.5] \
+            or args_cli.cam_lookat != [0.0, 0.0, 0.0]:
+        env_cfg.viewer.eye = tuple(args_cli.cam_eye)
+        env_cfg.viewer.lookat = tuple(args_cli.cam_lookat)
+        if args_cli.cam_follow:
+            env_cfg.viewer.origin_type = "asset_root"
+            env_cfg.viewer.asset_name = "robot"
+        print("[camera] eye=%s lookat=%s follow=%s"
+              % (env_cfg.viewer.eye, env_cfg.viewer.lookat, args_cli.cam_follow),
+              flush=True)
+
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
     # convert to single-agent instance if required by the RL algorithm
