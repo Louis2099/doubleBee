@@ -59,7 +59,27 @@ STAIR_TERRAINS_CFG = TerrainGeneratorCfg(
             # step_height_range=(0.01, 0.12),
             # step_height_range=(0.03, 0.12),
             # step_height_range=(0.03, 0.09),
-            step_height_range=(0.03, 0.09),   # narrower range centered around 5-7cm
+            # 2026-09-05: (0.03, 0.09) -> (0.03, 0.055).
+            #
+            # Two reasons, both new today. First, slope_threshold was corrected
+            # so every riser is now a TRUE VERTICAL FACE; previously anything
+            # under 5 cm was rendered as an incline, so the upper range was the
+            # only part that was really a staircase. Second, the wheel radius is
+            # 6.0 cm (measured) and h_max = r: above 6 cm the step edge sits
+            # higher than the axle and no torque or thrust rolls the wheel over.
+            # Leaving the range at 0.09 lets the curriculum promote into terrain
+            # physics forbids, where the policy can only fail and be demoted.
+            # 0.055 keeps the whole range climbable with margin.
+            # 2026-09-05: (0.03, 0.08). NOTE the interaction with the
+            # slope_threshold fix above. Now that every riser is a true vertical
+            # face, h_max = r = 0.06 m is a hard geometric ceiling: above it the
+            # step edge sits higher than the axle and no torque or thrust rolls
+            # the wheel over. So the top of this range (0.06-0.08) is
+            # UNCLIMBABLE BY CONSTRUCTION, and the curriculum will promote into
+            # it, fail, and demote. That is deliberate here -- it keeps a hard
+            # ceiling in the curriculum -- but do not read a plateau at terrain
+            # level ~1.7 as a policy limitation; it is the geometry.
+            step_height_range=(0.03, 0.08),
             step_width=0.4,
             platform_width=3.0,     # ⟵ was 2.5; larger flat bottom area
             border_width=1.0,
@@ -155,7 +175,7 @@ STAIR_TERRAINS_CFG_PLAY = TerrainGeneratorCfg(
             # Observed 2026-08-28: RUN 1 (terrain_levels 1.51, success 0.36)
             # looked far worse in play than RUN 2 (terrain_levels 0.02, success
             # 0.12), the opposite of what every training metric said.
-            step_height_range=(0.03, 0.09),  # now genuinely matches training
+            step_height_range=(0.03, 0.08),  # matches training; see the note above
             step_width=0.4,
             platform_width=3.0,
             border_width=1.0,
