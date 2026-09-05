@@ -42,31 +42,43 @@ import sys
 
 
 def summarise(pattern):
+    """Aggregate per-episode CSVs. Distributions, not thresholds.
+
+    2026-09-05: the `cleared` flag (gain held 0.5 s while displaced 0.35 m) fired
+    on 0.5% of episodes for a policy whose MEAN height gain was 60 mm, because
+    episodes end at the goal or in a fall before that hold window closes. Any
+    energy averaged over `cleared` episodes was therefore n=1. Height gain and
+    energy per metre climbed need no threshold and are what the comparison
+    should rest on.
+    """
     import numpy as np
     rows = []
     for path in sorted(glob.glob(pattern)):
         recs = list(csv.DictReader(open(path)))
         if not recs:
             continue
-        m = re.search(r"climb_(.+?)_h(\d+)\.csv$", os.path.basename(path))
-        tag, h = (m.group(1), int(m.group(2))) if m else (os.path.basename(path), 0)
-        cleared = np.array([float(r["cleared"]) for r in recs])
-        energy = np.array([float(r["energy_J"]) for r in recs])
         gain = np.array([float(r["max_gain_m"]) for r in recs])
-        ok = cleared > 0.5
-        rows.append((tag, h, len(recs), cleared.mean(),
-                     energy[ok].mean() if ok.any() else float("nan"),
-                     gain.mean()))
+        energy = np.array([float(r["energy_J"]) for r in recs])
+        steps = np.array([float(r["steps"]) for r in recs])
+        tag = re.sub(r"^climb_|\.csv$", "", os.path.basename(path))
+        # energy per metre climbed, summed rather than averaged per episode so
+        # episodes with ~0 gain cannot blow the ratio up
+        jpm = energy.sum() / gain.sum() if gain.sum() > 1e-6 else float("nan")
+        rows.append((tag, len(recs), gain.mean(), np.median(gain),
+                     np.percentile(gain, 90), gain.max(),
+                     energy.mean(), jpm, steps.mean()))
     if not rows:
-        sys.exit("no climb CSVs matched %r" % pattern)
-    rows.sort(key=lambda r: (r[0], r[1]))
-    print("%-10s %-7s %-6s %-10s %-14s %s"
-          % ("policy", "h_cm", "n_ep", "cleared", "energy_J", "mean_gain_m"))
-    print("-" * 62)
-    for t, h, n, c, e, g in rows:
-        print("%-10s %-7d %-6d %-10.3f %-14.0f %.3f" % (t, h, n, c, e, g))
-    print("\nenergy is over CLEARED episodes only. A policy that never leaves the\n"
-          "platform looks cheap, and that is not efficiency.")
+        sys.exit("no eval CSVs matched %r" % pattern)
+    print("%-9s %-6s %-8s %-8s %-8s %-8s %-9s %-10s %s"
+          % ("policy", "n", "gain_mean", "median", "p90", "max", "E_mean(J)", "J/m climbed", "ep_len"))
+    print("-" * 88)
+    for t, n, gm, gmed, g90, gmax, em, jpm, sl in rows:
+        print("%-9s %-6d %-8.3f %-8.3f %-8.3f %-8.3f %-9.0f %-10.0f %.0f"
+              % (t, n, gm, gmed, g90, gmax, em, jpm, sl))
+    print("\nAll episodes, identical terrain (the play curriculum, unmodified).")
+    print("J/m climbed = total joules / total height gained: the efficiency number,")
+    print("with no success threshold to argue about.")
+    return
 
 
 def main():
