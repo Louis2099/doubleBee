@@ -137,12 +137,18 @@ class TiedJointPositionAction(JointPositionAction):
         # surfaces as an async CUDA assert several terms later.
         sign = getattr(cfg, "tied_sign", None)
         if sign is not None:
-            if len(sign) != self._scale.shape[-1]:
+            # _scale is a plain FLOAT when cfg.scale was a scalar, and a tensor
+            # only when it was per-joint. Handle both: multiplying the float by
+            # the sign vector produces the (num_joints,) tensor we want, which
+            # then broadcasts against the (N,1) raw action in process_actions.
+            n_joints = getattr(self, "_num_joints", None) or len(self._joint_ids)
+            if len(sign) != n_joints:
                 raise ValueError(
                     "TiedJointPositionAction: tied_sign has %d entries for %d "
-                    "joints" % (len(sign), self._scale.shape[-1]))
-            self._scale = self._scale * torch.tensor(
-                list(sign), device=self.device, dtype=self._scale.dtype)
+                    "joints" % (len(sign), n_joints))
+            sign_t = torch.tensor(list(sign), device=self.device,
+                                  dtype=torch.float32)
+            self._scale = self._scale * sign_t
 
     @property
     def action_dim(self) -> int:
