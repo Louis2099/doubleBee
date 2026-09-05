@@ -29,7 +29,24 @@ STAIR_TERRAINS_CFG = TerrainGeneratorCfg(
     color_scheme="random",
     horizontal_scale=0.1,
     vertical_scale=0.005,
-    slope_threshold=0.5,
+    # 2026-09-05: 0.5 -> 0.1. THE RISERS WERE RAMPS.
+    #
+    # Isaac Lab scales this internally by horizontal_scale/vertical_scale, so
+    # 0.5 became 0.5 * (0.1/0.005) = 10 cells = 0.05 m: only rises ABOVE 5 cm
+    # were converted to vertical faces. Everything below stayed a slope spread
+    # over one 0.1 m cell, i.e. a 17 deg ramp at a 3 cm "step" and 22 deg at
+    # 4 cm. The lower two thirds of the curriculum was a drivable incline, not a
+    # staircase, which was visible the moment the camera was moved to a side
+    # view and not before.
+    #
+    # Consequence for the results measured before this date: with the wheel
+    # radius at 6 cm and h_max = r, the band where a riser was BOTH a real
+    # vertical step AND climbable was 5.0 to 6.0 cm. A policy finishing below
+    # terrain level 1.17 was driving up ramps.
+    #
+    # 0.1 gives 0.1 * 20 = 2 cells = 0.01 m, so every riser in the 0.03-0.09
+    # range is a true vertical face.
+    slope_threshold=0.1,
     # difficulty_range=(0.01, 0.7),
     difficulty_range=(0.0, 1.0),
     # use_cache=True,
@@ -115,7 +132,7 @@ STAIR_TERRAINS_CFG_PLAY = TerrainGeneratorCfg(
     color_scheme="random",
     horizontal_scale=0.1,
     vertical_scale=0.005,
-    slope_threshold=0.5,
+    slope_threshold=0.1,   # see the note in STAIR_TERRAINS_CFG above
     # formula used, step_height = step_min + difficulty * (step_max - step_min)
     # difficulty_range=(0.10, 0.24), # 4cm
     difficulty_range=(0.26, 0.40), # 5cm
