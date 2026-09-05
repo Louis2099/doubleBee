@@ -646,7 +646,27 @@ class ActionsCfg4D:
     propeller_servo_pos = TiedJointPositionActionCfg(
         asset_name="robot",
         joint_names=["leftPropellerServo", "rightPropellerServo"],
-        scale=SERVO_POS_LIMIT_RAD,
+        # MIRRORED SCALE. 2026-09-05, measured with check_servo_dirs.py:
+        #
+        #   servo joints both at +0.4798 rad
+        #   left  thrust axis (world) = (-0.021, +0.491, +0.871)
+        #   right thrust axis (world) = (+0.018, -0.430, +0.903)
+        #   horizontal sum 0.061 against 0.922 of individual magnitude
+        #   -> 93% of the horizontal thrust CANCELLED
+        #
+        # The servo joints are mirrored in the USD exactly like the wheels, so
+        # equal joint angles tilt the two propellers in OPPOSITE physical
+        # directions. TiedJointPositionAction's docstring asserts the opposite
+        # ("their joint axes agree"), and that assertion was never checked
+        # against the asset. Every policy trained before this date had its
+        # thrust vectoring almost entirely self-cancelling: the servo action
+        # could modulate how much thrust pointed sideways on EACH propeller, but
+        # the net horizontal force on the body stayed near zero.
+        #
+        # Same remedy as the wheels' +47/-47 tied_scale: negate one side so
+        # equal ACTIONS give the same physical pose.
+        scale={"leftPropellerServo": SERVO_POS_LIMIT_RAD,
+               "rightPropellerServo": -SERVO_POS_LIMIT_RAD},
         use_default_offset=False,
         preserve_order=True,
     )
