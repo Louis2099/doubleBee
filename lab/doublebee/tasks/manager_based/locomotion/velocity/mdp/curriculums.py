@@ -111,8 +111,15 @@ def terrain_levels_goal(env, env_ids, asset_cfg=SceneEntityCfg("robot")):
     # failure streak uses strict goal_reached — demotes on genuine failure
     if not hasattr(terrain, "_failure_streak"):
         terrain._failure_streak = torch.zeros(terrain.terrain_levels.shape[0], device=env.device)
+    # 2026-09-05: reset on the SAME criterion promotion uses.
+    #
+    # This used strict goal_reached while promotion used XY < 0.4, so an episode
+    # good enough to PROMOTE still incremented the failure counter. Combined
+    # with the streak bug below that produced the observed oscillation: terrain
+    # level climbing to ~1.5 and collapsing to ~0.5 with no change in the
+    # policy. Two counters measuring different things cannot form a hysteresis.
     terrain._failure_streak[env_ids] = torch.where(
-        reached,  # strict: only reset failure streak on real height+upright success
+        reached_for_curriculum,
         torch.zeros_like(terrain._failure_streak[env_ids]),
         terrain._failure_streak[env_ids] + 1,
     )
@@ -122,10 +129,25 @@ def terrain_levels_goal(env, env_ids, asset_cfg=SceneEntityCfg("robot")):
     # tip undid whatever progress had been made. Failure streak lowered 10 -> 5
     # so genuine incapability still demotes, just not on one bad sample.
     move_down = terrain._failure_streak[env_ids] >= 5
+    # CLEAR BOTH COUNTERS ON ANY LEVEL CHANGE.
+    #
+    # The success streak was previously never cleared on promotion: it fired at
+    # 3 and stayed at 3, so the next single success made it 4 -- still >= 3 --
+    # and promoted again. One good run and the env then promoted on EVERY
+    # subsequent success until it failed, racing up into terrain it could not
+    # handle. Clearing both means each level costs a fresh 3 consecutive
+    # successes to leave upward and a fresh 5 to leave downward, which is what
+    # makes this a hysteresis rather than a ratchet.
+    _changed = move_up | move_down
     terrain._failure_streak[env_ids] = torch.where(
-        move_down,
+        _changed,
         torch.zeros_like(terrain._failure_streak[env_ids]),
         terrain._failure_streak[env_ids],
+    )
+    terrain._success_streak[env_ids] = torch.where(
+        _changed,
+        torch.zeros_like(terrain._success_streak[env_ids]),
+        terrain._success_streak[env_ids],
     )
 
     MAX_LEVEL = 4
