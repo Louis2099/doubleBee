@@ -117,16 +117,32 @@ class TiedJointPositionAction(JointPositionAction):
     This term collapses that to a single dim: the one command is broadcast to
     every listed joint, and each joint still gets its own scale/offset.
 
-    IMPORTANT: use an EQUAL scale across the joints if you want them tied to
-    the same physical pose. A mirrored scale dict (+pi/2 / -pi/2) would drive
-    them to equal-and-opposite angles, i.e. the arms permanently opposed --
-    which on hardware means one propeller pointing at the ground.
+    WHETHER EQUAL SCALES GIVE THE SAME PHYSICAL POSE DEPENDS ON THE ASSET.
+    This docstring previously asserted they do. Measured 2026-09-05, they do
+    NOT for the propeller servos: the joints are mirrored in the USD, so equal
+    angles tilt the two propellers in opposite directions and 93% of the
+    horizontal thrust cancels. Use `tied_sign` for mirrored joints, and check
+    with scripts/paper/check_servo_dirs.py rather than assuming.
     """
 
     def __init__(self, cfg, env):
         super().__init__(cfg, env)
         # the base class sized this one-action-per-joint; collapse to a single dim
         self._raw_actions = torch.zeros(self.num_envs, 1, device=self.device)
+
+        # tied_sign: per-joint sign applied AFTER the base class built _scale.
+        # Use it when the joints are MIRRORED in the USD, so that equal joint
+        # angles are equal-and-opposite physical poses. Passing a dict as
+        # `scale` instead fails inside Isaac Lab's per-joint resolution and
+        # surfaces as an async CUDA assert several terms later.
+        sign = getattr(cfg, "tied_sign", None)
+        if sign is not None:
+            if len(sign) != self._scale.shape[-1]:
+                raise ValueError(
+                    "TiedJointPositionAction: tied_sign has %d entries for %d "
+                    "joints" % (len(sign), self._scale.shape[-1]))
+            self._scale = self._scale * torch.tensor(
+                list(sign), device=self.device, dtype=self._scale.dtype)
 
     @property
     def action_dim(self) -> int:
@@ -141,6 +157,10 @@ class TiedJointPositionAction(JointPositionAction):
 @configclass
 class TiedJointPositionActionCfg(mdp.JointPositionActionCfg):
     class_type: type[ActionTerm] = TiedJointPositionAction
+    tied_sign: tuple[float, ...] | None = None
+    """Per-joint sign, applied after the base scale. Set (1.0, -1.0) when the
+    two joints are mirrored in the USD so that equal ACTIONS produce the same
+    physical pose. Verify with scripts/paper/check_servo_dirs.py."""
 
 
 class TiedJointVelocityAction(JointVelocityAction):
@@ -646,27 +666,26 @@ class ActionsCfg4D:
     propeller_servo_pos = TiedJointPositionActionCfg(
         asset_name="robot",
         joint_names=["leftPropellerServo", "rightPropellerServo"],
-        # MIRRORED SCALE. 2026-09-05, measured with check_servo_dirs.py:
+        scale=SERVO_POS_LIMIT_RAD,
+        # MIRROR THE SECOND JOINT. 2026-09-05, measured with check_servo_dirs.py:
         #
-        #   servo joints both at +0.4798 rad
+        #   both servo joints at +0.4798 rad
         #   left  thrust axis (world) = (-0.021, +0.491, +0.871)
         #   right thrust axis (world) = (+0.018, -0.430, +0.903)
         #   horizontal sum 0.061 against 0.922 of individual magnitude
         #   -> 93% of the horizontal thrust CANCELLED
         #
         # The servo joints are mirrored in the USD exactly like the wheels, so
-        # equal joint angles tilt the two propellers in OPPOSITE physical
-        # directions. TiedJointPositionAction's docstring asserts the opposite
-        # ("their joint axes agree"), and that assertion was never checked
-        # against the asset. Every policy trained before this date had its
-        # thrust vectoring almost entirely self-cancelling: the servo action
-        # could modulate how much thrust pointed sideways on EACH propeller, but
-        # the net horizontal force on the body stayed near zero.
+        # equal joint angles tilt the propellers in OPPOSITE physical
+        # directions. The class docstring below asserted the opposite and was
+        # never checked against the asset, so every policy trained before this
+        # date had thrust vectoring that almost entirely self-cancelled.
         #
-        # Same remedy as the wheels' +47/-47 tied_scale: negate one side so
-        # equal ACTIONS give the same physical pose.
-        scale={"leftPropellerServo": SERVO_POS_LIMIT_RAD,
-               "rightPropellerServo": -SERVO_POS_LIMIT_RAD},
+        # A dict-valued `scale` does not work here: Isaac Lab's resolution path
+        # for per-joint scales fails inside the base class and surfaces later as
+        # an async CUDA assert. tied_sign is applied AFTER the base class has
+        # built its scale tensor, which keeps the well-tested scalar path.
+        tied_sign=(1.0, -1.0),
         use_default_offset=False,
         preserve_order=True,
     )
