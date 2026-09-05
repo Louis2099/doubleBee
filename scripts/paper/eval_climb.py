@@ -86,6 +86,10 @@ def main():
     p.add_argument("--min-xy", dest="min_xy", type=float, default=0.35,
                    help="metres of horizontal displacement required, so hovering "
                         "above the spawn platform does not count")
+    p.add_argument("--clear-gain", dest="clear_gain", type=float, default=0.04,
+                   help="height gain in metres counting as cleared when the "
+                        "terrain is NOT pinned. 0.04 sits above the smallest "
+                        "riser (0.03) and below the largest (0.09).")
     p.add_argument("--frac", type=float, default=0.8,
                    help="fraction of the step height that counts as up")
     p.add_argument("--out", default="climb.csv")
@@ -146,7 +150,11 @@ def main():
     base = env.unwrapped
     dev, n = base.device, a.num_envs
     hold_steps = max(1, int(a.hold / base.step_dt))
-    up_th = a.frac * a.step_height
+    # With the terrain unpinned the riser height varies per environment, so a
+    # fraction-of-step threshold is undefined. Use an absolute height gain:
+    # 0.04 m is above the smallest riser (0.03) and below the largest (0.09), so
+    # it means "got up at least one real step" across the whole curriculum.
+    up_th = (a.frac * a.step_height) if a.step_height is not None else a.clear_gain
 
     robot = base.scene["robot"]
     spawn = robot.data.root_pos_w.clone()
@@ -200,8 +208,18 @@ def main():
         w.writeheader()
         w.writerows(rows)
     frac = sum(r["cleared"] for r in rows) / len(rows)
-    print("wrote %s   cleared %.0f%% of %d episodes at h=%.0f cm"
-          % (a.out, 100 * frac, len(rows), 100 * a.step_height))
+    import statistics as st
+    g = [r["max_gain_m"] for r in rows]
+    e = [r["energy_J"] for r in rows if r["cleared"]]
+    print("wrote %s   cleared %.0f%% of %d episodes%s"
+          % (a.out, 100 * frac, len(rows),
+             ("  at h=%.0f cm" % (100 * a.step_height)) if a.step_height else
+             "  (play terrain, gain >= %.3f m)" % a.clear_gain))
+    print("  height gain: mean %.3f  median %.3f  p90 %.3f  max %.3f m"
+          % (st.mean(g), st.median(g), sorted(g)[int(0.9 * len(g))], max(g)))
+    if e:
+        print("  energy on cleared episodes: mean %.0f  median %.0f J"
+              % (st.mean(e), st.median(e)))
     env.close()
     app.close()
 
