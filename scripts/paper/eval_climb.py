@@ -21,7 +21,7 @@ CLEARED A RISER means, on a staircase of fixed height h:
   that, sustained height while displaced does not. The displacement requirement
   rejects hovering in place above the spawn platform.
 
-ENERGY is read from episode_energy_buf, the same power model the reward
+ENERGY is integrated here from the same power model the reward
 integrates (rewards.py::penalize_energy_consumption), so joules here and joules
 in the objective are the same quantity.
 
@@ -74,7 +74,10 @@ def main():
     p.add_argument("--summarise")
     p.add_argument("--checkpoint")
     p.add_argument("--task", default="Isaac-Velocity-HybridStair-DoubleBee-Play-v1-ppo")
-    p.add_argument("--step-height", type=float, default=0.05, help="riser height, m")
+    p.add_argument("--step-height", type=float, default=None,
+                   help="pin every staircase to this riser height. DEFAULT None = "
+                        "use the play terrain unchanged, which is what you want: "
+                        "pinning breaks the spawn/target patch sampling.")
     p.add_argument("--episodes", type=int, default=60)
     p.add_argument("--num_envs", type=int, default=64)
     p.add_argument("--hold", type=float, default=0.5,
@@ -106,16 +109,28 @@ def main():
 
     env_cfg = parse_env_cfg(a.task, num_envs=a.num_envs)
 
-    # Pin the staircase. step_height_range is normally (0.03, 0.09) spread over
-    # five curriculum rows; collapsing it to a single value and switching the
-    # curriculum off makes every environment identical and the difficulty known.
-    tg = env_cfg.scene.terrain.terrain_generator
-    tg.curriculum = False
-    tg.num_rows, tg.num_cols = 1, 5
-    tg.use_cache = False
-    key = next(k for k in tg.sub_terrains if "stair" in k)
-    tg.sub_terrains[key].step_height_range = (a.step_height, a.step_height)
-    print("[climb] staircase pinned at %.3f m (%s)" % (a.step_height, key), flush=True)
+    # DO NOT pin the terrain by default.
+    #
+    # 2026-09-05: pinning it (num_rows=1, curriculum=False, single
+    # step_height_range) broke the task. Spawn and target flat patches are
+    # sampled per curriculum tile, so collapsing the terrain changed the
+    # geometry the policies were trained in: mean height gain came out at
+    # 0.018-0.044 m for EVERY arm, including one that reaches 5.2 cm risers in
+    # training. That measured the harness, not the policies.
+    #
+    # The play terrain is identical for every arm, so it is already a matched
+    # comparison. Use it as-is and report the height-gain distribution.
+    if a.step_height is not None:
+        tg = env_cfg.scene.terrain.terrain_generator
+        tg.curriculum = False
+        tg.num_rows, tg.num_cols = 1, 5
+        tg.use_cache = False
+        key = next(k for k in tg.sub_terrains if "stair" in k)
+        tg.sub_terrains[key].step_height_range = (a.step_height, a.step_height)
+        print("[climb] staircase PINNED at %.3f m -- verify the policies still "
+              "climb before trusting this" % a.step_height, flush=True)
+    else:
+        print("[climb] play terrain as trained (steps 0.03-0.09 m over 5 rows)", flush=True)
 
     env = gym.make(a.task, cfg=env_cfg)
     agent_cfg = load_cfg_from_registry(a.task, "co_rl_tqc_cfg_entry_point")
@@ -135,6 +150,7 @@ def main():
 
     robot = base.scene["robot"]
     spawn = robot.data.root_pos_w.clone()
+    energy_j = torch.zeros(n, device=dev)     # our own integral of the power model
     run = torch.zeros(n, device=dev)          # consecutive steps above up_th
     cleared = torch.zeros(n, dtype=torch.bool, device=dev)
     max_gain = torch.zeros(n, device=dev)
@@ -147,6 +163,11 @@ def main():
             obs, _, dones, _ = env.step(policy(obs))
             pos = robot.data.root_pos_w
             steps += 1
+            # Integrate the SAME power model the reward uses. Reading
+            # episode_energy_buf at this point returns 0, because env.step() has
+            # already reset the finished environments and cleared it -- which is
+            # why every cleared episode reported 0 J on 2026-09-05.
+            energy_j += _step_joules(env, robot)
             gain = pos[:, 2] - spawn[:, 2]
             max_gain = torch.maximum(max_gain, gain)
             disp = torch.norm(pos[:, :2] - spawn[:, :2], dim=1)
@@ -159,7 +180,7 @@ def main():
                 rows.append({
                     "cleared": int(cleared[k].item()),
                     "max_gain_m": round(float(max_gain[k].item()), 4),
-                    "energy_J": round(float(base.episode_energy_buf[k].item()), 2),
+                    "energy_J": round(float(energy_j[k].item()), 2),
                     "steps": int(steps[k].item()),
                 })
                 # reset this env's bookkeeping; it has already been respawned
@@ -168,6 +189,7 @@ def main():
                 cleared[k] = False
                 max_gain[k] = 0.0
                 steps[k] = 0.0
+                energy_j[k] = 0.0
             if rows:
                 print("\r[climb] %d/%d" % (len(rows), a.episodes), end="", flush=True)
     print()
@@ -182,6 +204,39 @@ def main():
           % (a.out, 100 * frac, len(rows), 100 * a.step_height))
     env.close()
     app.close()
+
+
+def _step_joules(env, robot):
+    """Joules this control step, from the reward's own power model.
+
+    Mirrors rewards.py::penalize_energy_consumption exactly, including the
+    is_exponential flags carried in the fitted-model JSON. Dropping those
+    silently reports log-watts as watts.
+    """
+    import torch
+    from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.rewards import (
+        _PWM_POWER_COEFFS, _PWM_POWER_IS_EXP,
+        _RPM_POWER_COEFFS, _RPM_POWER_IS_EXP,
+        _torch_polyval,
+    )
+    d = robot.device
+    jn = robot.joint_names
+    pv = robot.data.joint_vel[:, [jn.index("leftPropeller"), jn.index("rightPropeller")]]
+    pwm = torch.clamp(1000.0 + (pv.abs() / 500.0) * 650.0, 1000.0, 2000.0)
+    pp = _torch_polyval(_PWM_POWER_COEFFS.to(d), pwm)
+    if _PWM_POWER_IS_EXP:
+        pp = torch.exp(pp)
+    pp = torch.clamp(pp, min=0.0).sum(dim=1)
+
+    wv = robot.data.joint_vel[:, [jn.index("leftWheel"), jn.index("rightWheel")]]
+    rpm = torch.clamp(wv.abs() * (60.0 / (2.0 * torch.pi)), 0.0, 300.0)
+    wp = _torch_polyval(_RPM_POWER_COEFFS.to(d), rpm)
+    if _RPM_POWER_IS_EXP:
+        wp = torch.exp(wp)
+    wp = torch.clamp(wp, min=0.0).sum(dim=1)
+
+    return (pp + wp) * env.unwrapped.step_dt
+
 
 
 if __name__ == "__main__":
