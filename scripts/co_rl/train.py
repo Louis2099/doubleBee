@@ -108,6 +108,30 @@ def main():
     # override configurations with CLI arguments
     agent_cfg = cli_args.update_co_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    # DOUBLEBEE_STEPS_PER_ENV: control steps collected per iteration.
+    #
+    # Collection is num_steps_per_env * decimation physics steps: at the default
+    # 24 and decimation 4 that is 96 physics steps, measured at 0.975 s of a
+    # 1.66 s iteration. Gradient count is normally welded to it
+    # (off_policy_runner: update_cnt=self.num_steps_per_env), so halving this
+    # would halve the learning too.
+    #
+    # Pair it with DOUBLEBEE_UPDATE_CNT to break that link:
+    #     DOUBLEBEE_STEPS_PER_ENV=12 DOUBLEBEE_UPDATE_CNT=24
+    # collects half as much and takes the SAME 24 gradient steps, which is a
+    # ~30% cut in iteration time for identical learning per iteration. The cost
+    # is a doubled replay ratio; watch Critic loss, and back off if it climbs.
+    if os.environ.get("DOUBLEBEE_STEPS_PER_ENV"):
+        agent_cfg.num_steps_per_env = int(os.environ["DOUBLEBEE_STEPS_PER_ENV"])
+        print("[perf] num_steps_per_env = %d" % agent_cfg.num_steps_per_env, flush=True)
+
+    # DOUBLEBEE_RENDER_INTERVAL: sim.render_interval defaults to `decimation`
+    # (4), so the renderer is stepped every control step even headless. Nothing
+    # reads those frames during a sweep. Raising it skips the work.
+    if os.environ.get("DOUBLEBEE_RENDER_INTERVAL"):
+        env_cfg.sim.render_interval = int(os.environ["DOUBLEBEE_RENDER_INTERVAL"])
+        print("[perf] sim.render_interval = %d" % env_cfg.sim.render_interval, flush=True)
+
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
     )
