@@ -152,32 +152,30 @@ def reward_climb_progress(env) -> torch.Tensor:
         pass  # no scanner -> gate stays 1 (fallback)
     
     try:
-        sj = robot.joint_names.index("leftPropellerServo")  # or whatever the servo joint is named
-        servo_pos = robot.data.joint_pos[:, sj]
         if not hasattr(env, "_servo_dbg"): env._servo_dbg = 0
         env._servo_dbg += 1
-        if env._servo_dbg % 50 == 0:
+        if _DIAG and env._servo_dbg % 50 == 0:
+            sj = robot.joint_names.index("leftPropellerServo")
+            servo_pos = robot.data.joint_pos[:, sj]
             print(f"[SERVO] pos(rad)={servo_pos[0].item():.3f} min={servo_pos.min().item():.3f} max={servo_pos.max().item():.3f}", flush=True)
     except (ValueError, IndexError):
         pass
 
         # ---- TEMP: log thrust world direction during climb ----
     try:
-        lp = robot.body_names.index("leftPropeller")
-        rp = robot.body_names.index("rightPropeller")
-        prop_ids = torch.tensor([lp, rp], device=robot.device)
-        prop_quat = robot.data.body_quat_w[:, prop_ids, :]  # [n,2,4]
-
-        # thrust is along prop local +Z (matches apply_propeller_aerodynamics)
-        thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
-        thrust_local[:, :, 2] = 1.0
-        thrust_world = quat_apply(prop_quat, thrust_local)  # [n,2,3]
-        z_frac = thrust_world[:, :, 2].mean(dim=1)  # world-Z fraction, 1=up 0=horiz -1=down
-
         if not hasattr(env, "_thrust_dbg"):
             env._thrust_dbg = 0
         env._thrust_dbg += 1
-        if env._thrust_dbg % 50 == 0:
+        if _DIAG and env._thrust_dbg % 50 == 0:
+            lp = robot.body_names.index("leftPropeller")
+            rp = robot.body_names.index("rightPropeller")
+            prop_ids = torch.tensor([lp, rp], device=robot.device)
+            prop_quat = robot.data.body_quat_w[:, prop_ids, :]  # [n,2,4]
+            # thrust is along prop local +Z (matches apply_propeller_aerodynamics)
+            thrust_local = torch.zeros(robot.num_instances, 2, 3, device=robot.device)
+            thrust_local[:, :, 2] = 1.0
+            thrust_world = quat_apply(prop_quat, thrust_local)  # [n,2,3]
+            z_frac = thrust_world[:, :, 2].mean(dim=1)
             print(f"[THRUST DIR] env0 z_frac={z_frac[0].item():.3f} "
                   f"mean={z_frac.mean().item():.3f} "
                   f"min={z_frac.min().item():.3f} max={z_frac.max().item():.3f}", flush=True)
@@ -218,7 +216,7 @@ def reward_climb_progress(env) -> torch.Tensor:
         # correlated servo POSITION against a WHEEL command -- they say nothing
         # about the servo loop. Resolve by term name so a future remap cannot
         # silently break it again.
-        if not hasattr(env, "_servo_act_idx"):
+        if _DIAG and not hasattr(env, "_servo_act_idx"):
             _idx, _found = 0, None
             for _name, _term in env.action_manager._terms.items():
                 if _name == "propeller_servo_pos":
@@ -226,19 +224,21 @@ def reward_climb_progress(env) -> torch.Tensor:
                     break
                 _idx += _term.action_dim
             env._servo_act_idx = _found
-        _si = env._servo_act_idx
-        _sa = (env.action_manager.action[:, _si] if _si is not None
-               else torch.zeros(env.num_envs, device=env.device))
-        if env._sact_prev is not None:
+        _si = getattr(env, "_servo_act_idx", None)
+        _sa = ((env.action_manager.action[:, _si] if _si is not None
+                else torch.zeros(env.num_envs, device=env.device))
+               if _DIAG else None)
+        if _DIAG and env._sact_prev is not None:
             _a = _sa - _sa.mean()
             _b = env._sact_prev - env._sact_prev.mean()
             _d = _a.norm() * _b.norm()
             if _d > 1e-8:
                 env._sact_ac_sum += float((_a @ _b / _d).item())
                 env._sact_ac_n += 1
-        env._sact_prev = _sa.clone()
+        if _DIAG:
+            env._sact_prev = _sa.clone()
 
-        if env._bal_dbg % 50 == 0:
+        if _DIAG and env._bal_dbg % 50 == 0:
             def _corr(a, b):
                 a = a.float(); b = b.float()
                 a = a - a.mean(); b = b - b.mean()
@@ -1599,6 +1599,18 @@ def _w(name, default):
     """Reward weight, overridden when DOUBLEBEE_REWARD_V2 is set."""
     return _V2_WEIGHTS[name] if (_REWARD_V2 and name in _V2_WEIGHTS) else default
 
+
+# DOUBLEBEE_DIAG: the [SERVO] / [THRUST DIR] / [BALANCE] probes below.
+#
+# Their PRINTS were throttled to every 50 steps, but the data gathering was not:
+# quat_apply over [n,2,4] with a fresh allocation, Python list.index() string
+# searches on joint and body names, a tensor-to-float comparison and a .item(),
+# all EVERY step. The last two are GPU syncs, so at 24 steps per iteration that
+# is ~48 pipeline stalls per iteration for output nobody reads during a sweep.
+#
+# Default OFF. Set DOUBLEBEE_DIAG=1 when you are actually debugging the balance
+# or servo loop, which is what these were written for.
+_DIAG = os.environ.get("DOUBLEBEE_DIAG", "0") not in ("0", "", "false", "False")
 
 @configclass
 class RewardsCfg:
