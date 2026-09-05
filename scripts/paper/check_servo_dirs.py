@@ -30,7 +30,14 @@ def main():
 
     import torch, gymnasium as gym, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    # These two pull in the task registrations. Importing co_rl alone is not
+    # enough: eval_climb.py works because it also imports the runner and the
+    # wrapper, which is what actually walks the lab.doublebee packages and calls
+    # gym.register. Without them the task name does not exist.
     import co_rl  # noqa: F401
+    from co_rl.core.runners import OffPolicyRunner  # noqa: F401
+    from co_rl.core.wrapper import CoRlVecEnvWrapper  # noqa: F401
+    import isaaclab_tasks  # noqa: F401
     from isaaclab_tasks.utils import parse_env_cfg
     from isaaclab.utils.math import quat_apply
 
