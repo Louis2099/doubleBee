@@ -375,15 +375,6 @@ def reward_progress_to_target(env):
     if not hasattr(env, "_pd") or env._pd.shape != dist.shape:
         env._pd = dist.clone(); return torch.zeros_like(dist)
     prog = env._pd - dist; env._pd = dist.clone()
-    # RESET BOUNDARY. _pd was never cleared when an episode ended, so the first
-    # step of every new episode compared the OLD episode's final distance against
-    # the NEW spawn's distance -- a teleport, not motion. The clamp below caps
-    # that at 0.1, but 0.1 x the 100 effective weight is +/-10 reward on a single
-    # step, sign determined by nothing, against ~0.5 for a real step of progress.
-    # One arbitrary 20x spike per episode, landing exactly where the critic has
-    # to bootstrap across the boundary.
-    fresh = env.episode_length_buf <= 1
-    prog = torch.where(fresh, torch.zeros_like(prog), prog)
     # 2026-08-29: LOWER BOUND 0.0 -> SYMMETRIC. THIS WAS A SHUTTLE FARM.
     #
     # Floored at zero, closing on the goal paid and retreating was FREE, so
@@ -391,20 +382,9 @@ def reward_progress_to_target(env):
     # At weight 10.0 this is the largest task term, which made shuttling the
     # single most profitable thing the policy could do near a target. Observed
     # as the robot going "backwards, or around the goal" instead of finishing.
-    # The +/-0.1 m/step clamp is 5 m/s and is never reached legitimately. It used
-    # to be the only thing standing between the reset teleport and the reward;
-    # that is now handled at source above, and this is a pure sanity bound.
-    #
-    # SCALE LIVES IN THE CONFIG. This returned `* 10.0` while RewTerm applied
-    # another 10.0, so the real weight was 100 while Table II reported 10. The
-    # factor is folded into the RewTerm weight so there is one number, and it is
-    # the number in the paper.
-    #
-    # Units matter for reading that number: this is POTENTIAL-BASED, so it pays
-    # per metre of net distance closed, not per step. Over a 3 m approach it
-    # totals ~300 against the 1000 goal bonus. Its weight is not comparable to a
-    # dense per-step term and should not be read as if it were.
-    return torch.clamp(prog, -0.1, 0.1)
+    # The +/-0.1 m/step clamp is 5 m/s and is never reached legitimately; it
+    # only guards against teleport-scale jumps at reset.
+    return torch.clamp(prog, -0.1, 0.1) * 10.0
 
 def reach_terrain_target(env) -> torch.Tensor:
     """Reward for reaching terrain target positions.
@@ -1932,9 +1912,7 @@ class RewardsCfg:
 
     reward_progress_to_target = RewTerm(
         func=reward_progress_to_target,
-        # 100.0 = the 10.0 that was here x the 10.0 the function used to apply
-        # internally. Behaviour is unchanged; the number is now honest.
-        weight=100.0,
+        weight=10.0,
     )
 
     reward_stable_after_climb = RewTerm(
