@@ -441,11 +441,23 @@ def _approaching(env):
     step = env._appr_pd - dist
     env._appr_pd = dist.clone()
     step = torch.where(env.episode_length_buf <= 1, torch.zeros_like(step), step)
-    # EMA so a single noisy tick does not switch the gate off mid-climb; a climb
-    # takes ~0.5 s and the robot is briefly stationary at the riser by necessity.
-    env._appr_ema = 0.9 * env._appr_ema + 0.1 * step
-    # full credit at 0.1 m/s of closing, zero when stationary or retreating
-    return torch.clamp(env._appr_ema / 0.002, 0.0, 1.0)
+    # SLOW EMA + A FLOOR. Both matter, and getting either wrong starves the policy.
+    #
+    # 2026-09-06, first attempt: alpha 0.1 and no floor. A balancing robot's
+    # per-step distance change fluctuates around zero -- it is stationary at a
+    # riser by necessity, it manoeuvres, it recovers from lean -- so a fast EMA
+    # sits near zero and the gate with it. Every gated term went to ~0.0003,
+    # mean reward went negative, episode length collapsed 743 -> 74 and tilt
+    # terminations went 0.03 -> 13.2 in forty iterations. The policy had no
+    # gradient left to learn from.
+    #
+    # alpha 0.02 (~50-step window) measures SUSTAINED progress rather than this
+    # tick's. The 0.3 floor keeps posture and thrust terms alive while the robot
+    # is legitimately not advancing, which is what stops it falling over; going
+    # where it was sent still pays 3.3x more, which is the behavioural signal we
+    # actually wanted. This is a preference, not a precondition.
+    env._appr_ema = 0.98 * env._appr_ema + 0.02 * step
+    return 0.3 + 0.7 * torch.clamp(env._appr_ema / 0.002, 0.0, 1.0)
 
 
 def reach_terrain_target(env) -> torch.Tensor:
