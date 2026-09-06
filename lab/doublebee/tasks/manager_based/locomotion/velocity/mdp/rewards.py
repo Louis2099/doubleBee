@@ -540,7 +540,26 @@ def reach_terrain_target(env) -> torch.Tensor:
     #     rewards = rewards * height_factor
     if hasattr(command_term, "current_targets_w"):
         robot_z = robot.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
-        target_z = command_term.current_targets_w[:, 2]
+        # TARGET THE BODY'S STANDING HEIGHT, NOT THE TREAD SURFACE.
+        #
+        # current_targets_w[2] is the surface plus TARGET_Z_VIS_OFFSET (0.05), a
+        # marker clearance, not a pose. A robot STANDING on the tread has its
+        # root 0.063 m above the surface -- measured in play 2026-09-06, root
+        # z = -0.252 against terrain z = -0.315 -- so standing scored 0.924 and
+        # lying flat 0.793. Only 1.17x apart, which is why it dives onto the
+        # platform and is why raising the marker was never the fix: the marker
+        # height is a rendering clearance and moving it misleads the eye at the
+        # 17 deg play camera (see TARGET_Z_VIS_OFFSET's history).
+        #
+        # Subtracting the marker offset and adding the standing height makes the
+        # comparison "is the BODY where it would be if it were standing there",
+        # which is what the success criterion means by arriving.
+        from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.velocity_command import (
+            TARGET_Z_VIS_OFFSET,
+        )
+        ROBOT_STAND_Z = 0.063
+        target_z = (command_term.current_targets_w[:, 2]
+                    - TARGET_Z_VIS_OFFSET + ROBOT_STAND_Z)
         height_match = torch.exp(-torch.abs(target_z - robot_z) / 0.1)
         # height_factor = 0.5 + 0.5 * height_match
         height_factor = 0.2 + 0.8 * height_match
@@ -561,7 +580,11 @@ def reach_terrain_target(env) -> torch.Tensor:
     # Same argument III-D-c already makes for the TERMINAL reward, applied to the
     # dense one: pay only for arrivals the platform can physically hold.
     upright = torch.clamp(-robot.data.projected_gravity_b[:, 2], 0.0, 1.0)
-    rewards = rewards * (upright ** 2)
+    # ^4 rather than ^2. At the 46-48 deg mean lean the success ablation keeps
+    # reporting for rejected arrivals, ^2 pays 0.48 and ^4 pays 0.23 -- 4.3x
+    # discrimination against 2.1x. Arriving upright is the whole point of the
+    # criterion (III-D-c); the dense term should not be nearly indifferent to it.
+    rewards = rewards * (upright ** 4)
 
         # print(f"[FRAME] robot_z={robot.data.root_pos_w[0,2].item():.2f} "
         #   f"target_z={command_term.current_targets_w[0,2].item():.2f} "
