@@ -1371,7 +1371,22 @@ def penalize_yaw_spin(env, deadband: float = 1.5, scale: float = 1.5) -> torch.T
     """
     robot = env.scene["robot"]
     yaw_rate = robot.data.root_ang_vel_b[:, 2].abs()
-    return -torch.clamp((yaw_rate - deadband) / scale, 0.0, 1.0)
+    charge = torch.clamp((yaw_rate - deadband) / scale, 0.0, 1.0)
+    # TIGHTEN AT A RISER. 2026-09-06 hardware, hw_new_183925: approaching a 6 cm
+    # step at 0.73 m/s, the robot swung 90-101 deg in yaw. One wheel meets the
+    # edge a few milliseconds before the other, that wheel decelerates, and the
+    # asymmetry is a yaw impulse -- the failure mode VI-B3 already reports as
+    # "asymmetric wheel contact on the step edge (also seen in simulation)".
+    #
+    # Nothing in the reward asked the policy to arrive SQUARE to the edge, and
+    # with k_diff at a sixth of translation authority it cannot correct a large
+    # one after the fact. So the deadband closes where a riser is in view: yaw
+    # that is free on open ground is charged in full at a step, which pays for
+    # lining up before contact rather than recovering after it.
+    ahead = _step_ahead_gate(env, robot)
+    charge = torch.maximum(charge,
+                           ahead * torch.clamp(yaw_rate / scale, 0.0, 1.0))
+    return -charge
 
 
 def reward_props_upright(env) -> torch.Tensor:
