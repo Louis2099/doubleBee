@@ -1672,6 +1672,18 @@ _REWARD_V2 = os.environ.get("DOUBLEBEE_REWARD_V2", "0") not in ("0", "", "false"
 _V2_WEIGHTS = {
     "reward_alive_upright": 0.5,              # was 2.0
     "reward_props_upright": 2.0,              # was 5.0
+    # reward_thrust_up_at_step is props_upright's twin -- same 5.0, same "point
+    # the props up" payout, just gated on a riser being ahead. Cutting one and
+    # not the other left the whole posture income intact through the other door.
+    #
+    # Measured 2026-09-06 across the sweep: it is the LARGEST positive term in
+    # every arm that collapsed (wE2 0.998, wE5 0.797, wE10 1.121) and the
+    # smallest in the one that worked (wE0 0.366, 54.6% success). An energy
+    # penalty makes acting expensive, so the policy minimises action; parking at
+    # a riser with the props up costs nothing and paid 0.3 x 5.0 = 1.5/step
+    # forever. That is why every energy arm timed out at ~960 steps with <5%
+    # success while the unpenalised arm finished in 564 and hit 54.6%.
+    "reward_thrust_up_at_step": 2.0,          # was 5.0
     "reward_vertical_thrust_support": 1.5,    # was 3.0
     "reward_thrust_recovery_under_lean": 3.0, # was 6.0
     "reach_terrain_target": 5.0,              # V2 raised this to 15.0; see below
@@ -2024,7 +2036,7 @@ class RewardsCfg:
 
     reward_thrust_up_at_step = RewTerm(
         func=reward_thrust_up_at_step,
-        weight=5.0, # WASS 3.0
+        weight=_w("reward_thrust_up_at_step", 5.0), # WASS 3.0
     )
 
     # 5.0 -> 2.0 on 2026-08-26. THE PROPELLER TERMS HAD TAKEN OVER THE REWARD.
