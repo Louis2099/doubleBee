@@ -430,6 +430,11 @@ def _approaching(env):
     because reward term evaluation order is not guaranteed.
     """
     robot = env.scene["robot"]
+    # TIED TO DOUBLEBEE_REWARD_V2 so that flag is a single, clean revert to the
+    # pre-2026-09-06 reward. Without this, V2=0 gave old weights with new gating
+    # -- a combination that has never been run and is nobody's intent.
+    if not _REWARD_V2:
+        return torch.ones(robot.num_instances, device=robot.device)
     cmd = env.command_manager._terms.get("base_velocity")
     if cmd is None or not hasattr(cmd, "current_targets_w"):
         return torch.ones(robot.num_instances, device=robot.device)
