@@ -188,7 +188,11 @@ class TerrainTargetDirectionCommand(UniformVelocityCommand):
         # Flat patches are stored with Z=0 relative to terrain base, but they may be on steps
         # at various heights. Since we can't query the actual terrain height here, we use
         # a fixed offset that approximates the average step height.
-        # Note: This only affects visualization - rewards/constraints use XY only, so Z doesn't matter
+        # NOT visualization-only, despite what this comment used to say.
+        # constraints.py::goal_reached subtracts the offset and checks at_height
+        # against it, and rewards.py::reach_terrain_target multiplies by a
+        # height_factor computed from this Z WITHOUT subtracting it. Changing
+        # this constant changes the reward landscape, not just the picture.
         target_world[:, 2] += TARGET_Z_VIS_OFFSET
 
         self.current_targets_w[idx, :] = target_world
