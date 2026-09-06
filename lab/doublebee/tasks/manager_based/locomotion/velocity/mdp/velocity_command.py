@@ -24,7 +24,18 @@ from isaaclab.utils import configclass
 # constraints.py imports THIS constant. The two must never drift apart: when
 # they did, at_height compared the robot against a target 0.3 m too high and
 # rejected arrivals that were correct.
-TARGET_Z_VIS_OFFSET = 0.05
+#
+# 2026-09-06: NOW PURELY COSMETIC. Both consumers subtract it before use --
+# constraints.py::goal_reached for at_height, and rewards.py::reach_terrain_target
+# for the height factor, which then adds the robot's measured 0.063 m standing
+# height instead. So this only positions the debug sphere and can be set for
+# visibility without touching the reward landscape.
+#
+# 0.05 buried the marker in the tread when the target sat on a step. 0.10 clears
+# it. Do NOT keep raising it: apparent horizontal displacement at the ~17 deg
+# play camera is offset / tan(17 deg) = 3.27x the offset, so 0.10 already shifts
+# the ball ~33 cm on screen. That illusion is what cost a day at 0.3.
+TARGET_Z_VIS_OFFSET = 0.10
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
