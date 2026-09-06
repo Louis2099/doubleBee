@@ -1534,7 +1534,13 @@ def penalize_thrust_pointing_down(env) -> torch.Tensor:
     # policy would have shut down again for lack of an alternative.
     return -penalty_down
 
-def reward_thrust_recovery_under_lean(env, lean_onset: float = 0.05) -> torch.Tensor:
+def reward_thrust_recovery_under_lean(env, lean_onset: float = 0.15) -> torch.Tensor:
+    # 0.05 -> 0.15, the value this function's own docstring documents.
+    # At 0.05 the gate opens at 2.9 deg of lean, so a balancing robot is past
+    # it permanently and collects ~44% of the maximum for ordinary pitch --
+    # precisely what the parameter exists to prevent. Measured 2026-09-06,
+    # wE0.5 iteration 525: this was the single largest per-step reward in the
+    # set at 0.8442, 88% of the net per-step income driving the loitering.
     """Pay for VERTICAL thrust in proportion to how far the robot is leaning.
 
     Added 2026-08-23. This is the counterpart to removing prop_active from
@@ -1685,7 +1691,11 @@ _V2_WEIGHTS = {
     # success while the unpenalised arm finished in 564 and hit 54.6%.
     "reward_thrust_up_at_step": 2.0,          # was 5.0
     "reward_vertical_thrust_support": 1.5,    # was 3.0
-    "reward_thrust_recovery_under_lean": 3.0, # was 6.0
+    # 6.0 -> 1.5. Halved again on 2026-09-06 alongside the lean_onset fix: even
+    # gated at the documented threshold this is the reward the policy leans on
+    # to justify lingering, and tilt terminations are 0.017 -- the robot is in
+    # no danger of falling and does not need to be paid this much to fight.
+    "reward_thrust_recovery_under_lean": 1.5, # was 6.0, then 3.0
     "reach_terrain_target": 5.0,              # V2 raised this to 15.0; see below
     # terminal_goal_reached stays at its original 10.0. V2 doubled it to 20.0 to
     # beat the loitering income; _approaching() now removes that income at
