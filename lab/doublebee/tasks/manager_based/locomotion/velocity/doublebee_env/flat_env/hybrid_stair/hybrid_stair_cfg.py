@@ -444,7 +444,21 @@ class DoubleBeeHybridStairCfg(DoubleBeeVelocityEnvCfg):
         print("[INFO] Using TerrainTargetDirectionCommand - robot will follow terrain targets.")
         
         # Episode settings
-        self.episode_length_s = 20.0
+        #
+        # DOUBLEBEE_EPISODE_S: shorten the horizon to cut loitering income.
+        #
+        # 20 s = 1000 steps, against targets sampled 1.5-3.2 m out (III-B) that
+        # the policy reaches in well under 200 steps when it is actually trying:
+        # measured 2026-09-06 at iteration 60, mean episode length 91.5 with
+        # goal_reached 1.62 and time_out 0.017. Every step beyond what the task
+        # needs is free survival income, and by iteration 120 the same run had
+        # stretched to 891.9 steps with time_out 1.24 and goal_reached 0.32 --
+        # five times fewer arrivals, same policy, just paid to linger.
+        #
+        # Halving the horizon halves the maximum payoff from stalling without
+        # touching a single reward weight, so unlike a gain change it cannot
+        # invert a feedback loop. Default stays 20.0 so existing runs reproduce.
+        self.episode_length_s = float(os.environ.get("DOUBLEBEE_EPISODE_S", 20.0))
         self.decimation = 4
         
         # Simulation settings
