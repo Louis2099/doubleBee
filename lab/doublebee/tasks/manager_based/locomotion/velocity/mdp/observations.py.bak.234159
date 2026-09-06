@@ -145,24 +145,7 @@ def servo_positions(
             servo_indices.append(int(joint_ids))
     
     if len(servo_indices) > 0:
-        # MIRROR THE RIGHT SERVO, matching actions.py::TiedJointPositionAction's
-        # tied_sign=(1.0, -1.0). The two servo joints are mirrored in the USD, so
-        # equal joint angles tilt the propellers in OPPOSITE physical directions.
-        # The action side already corrects for this; reporting raw joint_pos here
-        # does not, so obs[3] carried the opposite physical meaning to obs[2].
-        #
-        # Fixing the action alone (2026-09-05) flipped this observation's sign
-        # without changing its name, which silently put every policy trained
-        # before that date out of distribution on one of its 40 inputs. Warm
-        # starting baseline_4000 gave episode length 31 instead of the 143 it
-        # reached with matched observations.
-        #
-        # After this, both entries mean "physical tilt in the same direction",
-        # which is both what pre-fix policies were trained on and the more
-        # sensible encoding.
-        sign = torch.tensor([1.0, -1.0], device=asset.data.joint_pos.device,
-                            dtype=asset.data.joint_pos.dtype)
-        return asset.data.joint_pos[:, servo_indices] * sign
+        return asset.data.joint_pos[:, servo_indices]
     else:
         # Fallback: return all joint positions
         return asset.data.joint_pos
