@@ -550,6 +550,18 @@ def reach_terrain_target(env) -> torch.Tensor:
     # stall penalty, and 72 steps of loitering outbid the 1000 goal bonus.
     # Gated, it pays only while actually closing.
     rewards = rewards * _approaching(env)
+    # UPRIGHTNESS. This term paid for being AT the target in any attitude --
+    # standing 0.924 vs lying 0.793, only a 14% difference -- while success
+    # requires uprightness > 0.85. The dense reward and the success criterion
+    # disagreed, so diving onto the platform collected ~86% of what climbing onto
+    # it did, every step. Observed in play 2026-09-06, and in the success
+    # ablation: 92% of at-target states fail the uprightness check, at a mean
+    # lean of 46 deg.
+    #
+    # Same argument III-D-c already makes for the TERMINAL reward, applied to the
+    # dense one: pay only for arrivals the platform can physically hold.
+    upright = torch.clamp(-robot.data.projected_gravity_b[:, 2], 0.0, 1.0)
+    rewards = rewards * (upright ** 2)
 
         # print(f"[FRAME] robot_z={robot.data.root_pos_w[0,2].item():.2f} "
         #   f"target_z={command_term.current_targets_w[0,2].item():.2f} "
