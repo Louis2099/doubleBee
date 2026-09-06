@@ -110,7 +110,7 @@ def reward_stable_after_climb(env) -> torch.Tensor:
     settled = torch.exp(-ang_vel_mag / 2.0)  # 1 when still, decays as it spins
 
     # reward only when all three: climbed, upright, settled
-    return climbed * upright * settled * _approaching(env)  # gated: no per-step income while off-course or stationary (see _approaching)
+    return climbed * upright * settled
 
 def reward_climb_progress(env) -> torch.Tensor:
     """Reward GAINING HEIGHT while at a step. Technique-agnostic: doesn't prescribe
@@ -342,7 +342,7 @@ def reward_climb_progress(env) -> torch.Tensor:
     # ---- END BALANCE PROBE ----------------------------------------------
 
     # reward: going UP while AT a step. Technique-agnostic.
-    return rising * step_ahead * _approaching(env)  # gated: no per-step income while off-course or stationary (see _approaching)
+    return rising * step_ahead
 
 def reward_thrust_up_at_step(env) -> torch.Tensor:
     robot = env.scene["robot"]
@@ -364,7 +364,7 @@ def reward_thrust_up_at_step(env) -> torch.Tensor:
         step_ahead = torch.clamp((ray_z.max(dim=1)[0] - ray_z.median(dim=1)[0]) / 0.04, 0.0, 1.0)
     except (KeyError, ValueError, IndexError):
         pass
-    return z_frac * step_ahead * _approaching(env)   # up at a step, only while closing on the goal  # gated: no per-step income while off-course or stationary (see _approaching)
+    return z_frac * step_ahead   # reward pointing up at a step, regardless of prop speed
 
 def reward_progress_to_target(env):
     robot = env.scene["robot"]
@@ -404,49 +404,7 @@ def reward_progress_to_target(env):
     # per metre of net distance closed, not per step. Over a 3 m approach it
     # totals ~300 against the 1000 goal bonus. Its weight is not comparable to a
     # dense per-step term and should not be read as if it were.
-    # +/-0.02 m/step = 1 m/s, 4x the 0.25 m/s this robot drives. The old
-    # +/-0.1 was 5 m/s and could never bind on real motion, so it was dead
-    # code once the reset teleport was handled at source.
-    # NORMALISED to [-1, 1] as a fraction of the per-step clamp, so this term is
-    # dimensionless like every other reward and its weight is readable next to
-    # them. Returning raw metres meant a per-step value of ~0.005, which forced
-    # an effective weight of 100 to have any influence -- a number that looks
-    # arbitrary in a table and is really just a unit conversion.
-    #
-    #   1.0  =  closing at the 0.02 m/step clamp (1 m/s)
-    #   0.25 =  closing at the robot's usual 0.25 m/s
-    #  -1.0  =  retreating at the clamp
-    return torch.clamp(prog, -0.02, 0.02) / 0.02
-
-def _approaching(env):
-    """0-1 gate: is this robot CURRENTLY closing on its goal?
-
-    Climb rewards pay for height gained at a step, anywhere on the terrain. On an
-    inverted-pyramid staircase there are risers in every direction, so a policy
-    can farm them indefinitely without ever going where it was sent -- observed
-    2026-09-06 in wE0/model_100, which climbed well and climbed the wrong things.
-
-    Keeps its own distance history rather than reusing reward_progress_to_target's,
-    because reward term evaluation order is not guaranteed.
-    """
-    robot = env.scene["robot"]
-    cmd = env.command_manager._terms.get("base_velocity")
-    if cmd is None or not hasattr(cmd, "current_targets_w"):
-        return torch.ones(robot.num_instances, device=robot.device)
-    dist = torch.norm(robot.data.root_pos_w[:, :2] - cmd.current_targets_w[:, :2], dim=1)
-    if not hasattr(env, "_appr_pd") or env._appr_pd.shape != dist.shape:
-        env._appr_pd = dist.clone()
-        env._appr_ema = torch.zeros_like(dist)
-        return torch.ones_like(dist)
-    step = env._appr_pd - dist
-    env._appr_pd = dist.clone()
-    step = torch.where(env.episode_length_buf <= 1, torch.zeros_like(step), step)
-    # EMA so a single noisy tick does not switch the gate off mid-climb; a climb
-    # takes ~0.5 s and the robot is briefly stationary at the riser by necessity.
-    env._appr_ema = 0.9 * env._appr_ema + 0.1 * step
-    # full credit at 0.1 m/s of closing, zero when stationary or retreating
-    return torch.clamp(env._appr_ema / 0.002, 0.0, 1.0)
-
+    return torch.clamp(prog, -0.1, 0.1)
 
 def reach_terrain_target(env) -> torch.Tensor:
     """Reward for reaching terrain target positions.
@@ -528,11 +486,6 @@ def reach_terrain_target(env) -> torch.Tensor:
         # height_factor = 0.5 + 0.5 * height_match
         height_factor = 0.2 + 0.8 * height_match
         rewards = rewards * height_factor
-    # Level-based proximity pays every step the robot is near the goal, so
-    # parking beat finishing: at V2's 15.0 it paid +15/step against a -1/step
-    # stall penalty, and 72 steps of loitering outbid the 1000 goal bonus.
-    # Gated, it pays only while actually closing.
-    rewards = rewards * _approaching(env)
 
         # print(f"[FRAME] robot_z={robot.data.root_pos_w[0,2].item():.2f} "
         #   f"target_z={command_term.current_targets_w[0,2].item():.2f} "
@@ -1204,7 +1157,7 @@ def reward_alive_upright(env, tol: float = 0.5) -> torch.Tensor:
     """
     robot = env.scene["robot"]
     uprightness = -robot.data.projected_gravity_b[:, 2]
-    return (uprightness > tol).float() * _approaching(env)  # gated: no per-step income while off-course or stationary (see _approaching)
+    return (uprightness > tol).float()
 
 
 def reward_climb_transition(env) -> torch.Tensor:
@@ -1385,7 +1338,7 @@ def reward_props_upright(env) -> torch.Tensor:
         )
         # Gated on progress: posture pays while the robot is getting somewhere,
         # not while parked. See _not_stalled().
-        return (z_frac ** 2) * (0.25 + 0.75 * spin) * _not_stalled(env, robot) * _approaching(env)  # gated: no per-step income while off-course or stationary (see _approaching)
+        return (z_frac ** 2) * (0.25 + 0.75 * spin) * _not_stalled(env, robot)
     except (ValueError, IndexError):
         return torch.zeros(robot.num_instances, device=robot.device)
 
@@ -1447,7 +1400,7 @@ def reward_vertical_thrust_support(env, target_frac: float = 0.7) -> torch.Tenso
         # saturating reward: climbs to target_frac, flat beyond it
         # Gated on progress: posture pays while the robot is getting somewhere,
         # not while parked. See _not_stalled().
-        return torch.clamp(vert / target_frac, 0.0, 1.0) * _not_stalled(env, robot) * _approaching(env)  # gated: no per-step income while off-course or stationary (see _approaching)
+        return torch.clamp(vert / target_frac, 0.0, 1.0) * _not_stalled(env, robot)
     except (ValueError, IndexError):
         return torch.zeros(robot.num_instances, device=robot.device)
 
@@ -1621,7 +1574,7 @@ def reward_prop_thrust_when_climbing(env) -> torch.Tensor:
         pass
 
     # reward: spinning props HARD, pointed up, at a step = real upward assist
-    return prop_speed_norm * z_frac * step_ahead * _approaching(env)  # gated: no per-step income while off-course or stationary (see _approaching)
+    return prop_speed_norm * z_frac * step_ahead
 
 
 # ---------------------------------------------------------------------------
@@ -1657,22 +1610,9 @@ _V2_WEIGHTS = {
     "reward_props_upright": 2.0,              # was 5.0
     "reward_vertical_thrust_support": 1.5,    # was 3.0
     "reward_thrust_recovery_under_lean": 3.0, # was 6.0
-    "reach_terrain_target": 5.0,              # V2 raised this to 15.0; see below
-    # terminal_goal_reached stays at its original 10.0. V2 doubled it to 20.0 to
-    # beat the loitering income; _approaching() now removes that income at
-    # source, so raising the terminal too would correct the same failure twice.
-    # It also keeps lambda = 8.9 (III-D-b) calibrated against the value it was
-    # measured for.
-    "terminal_goal_reached": 10.0,
-    "penalize_stalling_near_target": 6.0,     # was 1.0
+    "reach_terrain_target": 15.0,             # was 5.0
+    "terminal_goal_reached": 20.0,            # was 10.0
 }
-# 2026-09-06: reach_terrain_target back down from 15.0, and now gated on
-# _approaching. It is exp(-d^2/s^2) x height_factor -- a LEVEL, not a progress
-# signal -- so at 15.0 it paid +15/step for sitting at the goal against a
-# -1/step stall penalty. 72 steps of loitering beat the 1000 goal bonus, and
-# wE10 went from 450 to 743 mean episode length in 30 iterations doing exactly
-# that. The approach gradient is carried by reward_progress_to_target, which is
-# potential-based and cannot be farmed; this term only breaks ties near the goal.
 
 
 def _w(name, default):
@@ -1905,7 +1845,7 @@ class RewardsCfg:
     
     penalize_stalling_near_target = RewTerm(
         func=penalize_stalling_near_target,
-        weight=_w("penalize_stalling_near_target", 1.0),
+        weight=1.0,
     )
     
     penalize_time = RewTerm(
@@ -1992,12 +1932,9 @@ class RewardsCfg:
 
     reward_progress_to_target = RewTerm(
         func=reward_progress_to_target,
-        # 2.0 with the normalised [-1, 1] return is EXACTLY the 100.0 that the
-        # raw-metres version needed (0.02 m clamp x 100 = 2.0 max per step).
-        # Behaviour is unchanged; the number is now comparable to the rest of
-        # the table. Potential-based, so by Ng et al. 1999 its scale cannot
-        # change the optimal policy, only the learning rate toward it.
-        weight=2.0,
+        # 100.0 = the 10.0 that was here x the 10.0 the function used to apply
+        # internally. Behaviour is unchanged; the number is now honest.
+        weight=100.0,
     )
 
     reward_stable_after_climb = RewTerm(
