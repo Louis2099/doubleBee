@@ -40,6 +40,13 @@ def main():
                         "bleeds in, lower if the robot comes out holey.")
     p.add_argument("--min-alpha", dest="min_alpha", type=float, default=0.35,
                    help="opacity of the earliest position; the last is always 1.0")
+    p.add_argument("--space", choices=("position", "time"), default="position",
+                   help="how to choose the frames. 'position' (default) spaces "
+                        "them evenly by the subject's horizontal centroid, which "
+                        "keeps poses from piling up where it slowed down; 'time' "
+                        "spaces them evenly in seconds.")
+    p.add_argument("--crop", default=None, metavar="X0,Y0,X1,Y1",
+                   help="crop the output to this pixel box, e.g. 250,180,848,478")
     p.add_argument("--bg-frames", dest="bg_frames", type=int, default=60,
                    help="frames sampled for the median background plate")
     a = p.parse_args()
@@ -70,7 +77,40 @@ def main():
     print("background plate from %d frames" % len(stack))
 
     comp = bg.copy().astype(np.float32)
-    picks = np.linspace(i0, i1, a.n).astype(int)
+
+    if a.space == "time":
+        picks = np.linspace(i0, i1, a.n).astype(int)
+    else:
+        # SPACE BY POSITION, NOT TIME.
+        #
+        # The robot dwells at the riser and then moves quickly over it, so evenly
+        # spaced frames pile three or four exposures on top of each other at the
+        # step and leave gaps elsewhere. Sampling so the subject's centroid is
+        # evenly spaced in x gives the readable strobe of a multi-exposure
+        # figure, where each pose is legible and the spacing itself shows where
+        # the machine slowed down.
+        cx, ids = [], []
+        for i in range(i0, i1 + 1, max(1, (i1 - i0) // 120)):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(i))
+            ok, f = cap.read()
+            if not ok:
+                continue
+            m = cv2.absdiff(f, bg).max(axis=2) > a.thresh
+            if m.sum() < 200:
+                continue
+            cx.append(np.nonzero(m)[1].mean())
+            ids.append(i)
+        if len(ids) < a.n:
+            print("  position spacing found only %d usable frames, using time"
+                  % len(ids))
+            picks = np.linspace(i0, i1, a.n).astype(int)
+        else:
+            cx = np.array(cx)
+            targets = np.linspace(cx.min(), cx.max(), a.n)
+            picks = np.array([ids[int(np.argmin(np.abs(cx - t)))] for t in targets])
+            picks = np.unique(picks)
+            print("centroid spans x %.0f..%.0f px, picked %d frames by position"
+                  % (cx.min(), cx.max(), len(picks)))
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     used = 0
     for k, i in enumerate(picks):
@@ -96,7 +136,12 @@ def main():
     if used < 2:
         sys.exit("only %d positions composited. Camera probably moved, or "
                  "--thresh is wrong for this footage." % used)
-    cv2.imwrite(a.out, comp.astype(np.uint8))
+    out = comp.astype(np.uint8)
+    if a.crop:
+        x0, y0, x1, y1 = (int(v) for v in a.crop.split(","))
+        out = out[y0:y1, x0:x1]
+        print("cropped to %s -> %dx%d" % (a.crop, out.shape[1], out.shape[0]))
+    cv2.imwrite(a.out, out)
     print("wrote %s  (%d positions, alpha %.2f -> 1.00)" % (a.out, used, a.min_alpha))
     print("\nIf the robot looks holey, lower --thresh. If the background bleeds\n"
           "in as ghosting, raise it. If the whole frame is smeared, the camera\n"
