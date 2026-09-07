@@ -75,6 +75,41 @@ def summarise(pattern):
     for t, n, gm, gmed, g90, gmax, em, jpm, sl in rows:
         print("%-9s %-6d %-8.3f %-8.3f %-8.3f %-8.3f %-9.0f %-10.0f %.0f"
               % (t, n, gm, gmed, g90, gmax, em, jpm, sl))
+    # SPLIT BY WHETHER THE EPISODE CLIMBED.
+    #
+    # Pooled J/m charges a failed episode's energy against zero metres, which
+    # penalises a policy for ATTEMPTING less rather than for being inefficient.
+    # Measured 2026-09-07: pooled, hE8 looked worst at 8156 J/m; restricted to
+    # episodes that cleared 6 cm it is the BEST at 5381, 11% cheaper per metre
+    # than the unpenalised arm, and 21% cheaper above 9 cm.
+    #
+    # Both numbers are needed. Pooled answers "what does this policy cost me per
+    # metre of stairs", which is what a deployment cares about. Split answers
+    # "when it climbs, how efficiently", which is what the energy term is
+    # actually shaping. Reporting only one of them misstates the trade-off.
+    print("\nSAME DATA, RESTRICTED TO EPISODES THAT CLIMBED")
+    for thr in (0.03, 0.06, 0.09):
+        print("\n  gain > %.2f m" % thr)
+        print("  %-9s %5s %9s %9s %9s %7s" %
+              ("policy", "n", "gain_mean", "E_mean", "J/m", "rate"))
+        for path in sorted(glob.glob(pattern)):
+            recs = list(csv.DictReader(open(path)))
+            if not recs:
+                continue
+            g = np.array([float(r["max_gain_m"]) for r in recs])
+            e = np.array([float(r["energy_J"]) for r in recs])
+            m = g > thr
+            tag = re.sub(r"^climb_|\.csv$", "", os.path.basename(path))
+            if m.sum() < 3:
+                print("  %-9s %5d   (too few to average)" % (tag, m.sum()))
+                continue
+            print("  %-9s %5d %9.3f %9.0f %9.0f %6.0f%%"
+                  % (tag, m.sum(), g[m].mean(), e[m].mean(),
+                     e[m].sum() / g[m].sum(), 100.0 * m.mean()))
+    print("\n  rate = fraction of the 200 episodes that reached that height.")
+    print("  A policy can be cheap per metre and still rarely climb; both columns")
+    print("  are the trade-off, and neither alone is the answer.")
+
     print("\nAll episodes, identical terrain (the play curriculum, unmodified).")
     print("J/m climbed = total joules / total height gained: the efficiency number,")
     print("with no success threshold to argue about.")
