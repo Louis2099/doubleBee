@@ -132,7 +132,7 @@ def _probe_managers(base):
     the TerminationManager the first two attempts assumed, which is why every
     episode was labelled "?" on 2026-09-08.
     """
-    print("\n===== MANAGER PROBE =====")
+    print("\n===== MANAGER PROBE =====", flush=True)
     print("env class: %s" % type(base).__name__)
     names = [x for x in dir(base) if "manager" in x.lower() and not x.startswith("__")]
     print("manager attributes: %s" % names)
@@ -171,7 +171,8 @@ def _probe_managers(base):
                                                  else type(d).__name__))
                 except Exception:
                     pass
-    print("===== END PROBE =====\n")
+    print("===== END PROBE =====\n", flush=True)
+    sys.stdout.flush()
 
 
 def _term_flags(tmgr, names):
@@ -324,6 +325,10 @@ def main():
     max_run = torch.zeros(n, device=dev)      # longest continuous hold, steps
     max_disp = torch.zeros(n, device=dev)     # furthest from spawn, m
     why = ["?"] * n                           # termination term that fired
+    # Gain on the last LIVE step. If it tracks max_gain the robot climbed and
+    # stayed up; if it decays to ~0 the robot went up and came back down, and
+    # max_gain alone would have called that a climb.
+    last_gain = torch.zeros(n, device=dev)
     steps = torch.zeros(n, device=dev)
     rows = []
 
@@ -340,21 +345,30 @@ def main():
         with torch.inference_mode():
             obs, _, dones, _ = env.step(policy(obs))
             pos = robot.data.root_pos_w
-            steps += 1
-            # Integrate the SAME power model the reward uses. Reading
-            # episode_energy_buf at this point returns 0, because env.step() has
-            # already reset the finished environments and cleared it -- which is
-            # why every cleared episode reported 0 J on 2026-09-05.
-            energy_j += _step_joules(env, robot)
+            # env.step() has ALREADY reset the environments that finished, so
+            # for those k, pos is the new spawn on a different terrain tile and
+            # `pos - spawn[k]` is the distance between two spawn points, not
+            # anything the robot did. Folding that into maxima let one garbage
+            # sample win: measured 2026-09-08, every episode reported
+            # max_disp_m of 1.0-1.8 m, which is why the 0.35 m displacement
+            # test never bound on anything. Fold in live environments only.
+            alive = dones <= 0.5
+            af = alive.float()
+
+            steps += af
+            energy_j += _step_joules(env, robot) * af
             gain = pos[:, 2] - spawn[:, 2]
-            max_gain = torch.maximum(max_gain, gain)
             disp = torch.norm(pos[:, :2] - spawn[:, :2], dim=1)
 
-            up = gain >= up_th
-            run = torch.where(up, run + 1, torch.zeros_like(run))
-            max_run = torch.maximum(max_run, run)
-            max_disp = torch.maximum(max_disp, disp)
-            cleared |= (run >= hold_steps) & (disp >= a.min_xy)
+            max_gain = torch.where(alive, torch.maximum(max_gain, gain), max_gain)
+            max_disp = torch.where(alive, torch.maximum(max_disp, disp), max_disp)
+            last_gain = torch.where(alive, gain, last_gain)
+
+            up = alive & (gain >= up_th)
+            run = torch.where(up, run + 1,
+                              torch.where(alive, torch.zeros_like(run), run))
+            max_run = torch.where(alive, torch.maximum(max_run, run), max_run)
+            cleared |= alive & (run >= hold_steps) & (disp >= a.min_xy)
 
             if tmgr is not None:
                 for nm, f in _term_flags(tmgr, term_names).items():
@@ -370,6 +384,7 @@ def main():
                     "steps": int(steps[k].item()),
                     "hold_s": round(float(max_run[k].item()) * base.step_dt, 3),
                     "max_disp_m": round(float(max_disp[k].item()), 3),
+                    "end_gain_m": round(float(last_gain[k].item()), 4),
                     "end": why[k],
                 })
                 # reset this env's bookkeeping; it has already been respawned
@@ -381,6 +396,7 @@ def main():
                 energy_j[k] = 0.0
                 max_run[k] = 0.0
                 max_disp[k] = 0.0
+                last_gain[k] = 0.0
                 why[k] = "?"
             if rows:
                 print("\r[climb] %d/%d" % (len(rows), a.episodes), end="", flush=True)
@@ -427,6 +443,16 @@ def main():
           % (st.median(hs), sorted(hs)[int(0.9 * len(hs))], max(hs)))
     print("  max_disp_m: median %.2f  p90 %.2f  max %.2f m"
           % (st.median(dp), sorted(dp)[int(0.9 * len(dp))], max(dp)))
+    eg = [r["end_gain_m"] for r in rows]
+    mg = [r["max_gain_m"] for r in rows]
+    held = sum(1 for r in rows if r["max_gain_m"] >= up_th
+               and r["end_gain_m"] >= 0.6 * r["max_gain_m"])
+    reached = sum(1 for r in rows if r["max_gain_m"] >= up_th)
+    print("  end_gain_m: median %.3f  (max_gain median %.3f)"
+          % (st.median(eg), st.median(mg)))
+    print("  of %d episodes reaching %.3f m, %d (%.0f%%) were still up at the "
+          "end" % (reached, up_th, held,
+                   100.0 * held / reached if reached else 0.0))
     print("  height gain: mean %.3f  median %.3f  p90 %.3f  max %.3f m"
           % (st.mean(g), st.median(g), sorted(g)[int(0.9 * len(g))], max(g)))
     if e:
