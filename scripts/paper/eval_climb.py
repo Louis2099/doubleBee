@@ -217,6 +217,12 @@ def main():
     run = torch.zeros(n, device=dev)          # consecutive steps above up_th
     cleared = torch.zeros(n, dtype=torch.bool, device=dev)
     max_gain = torch.zeros(n, device=dev)
+    # Keep the two quantities the clearance criterion is built from, so the
+    # criterion becomes a plotting-time choice instead of a decision frozen at
+    # eval time. `cleared` alone is not enough: it fired on 0.5% of episodes on
+    # 2026-09-05 and there was no way to tell a spike from a closed hold window.
+    max_run = torch.zeros(n, device=dev)      # longest continuous hold, steps
+    max_disp = torch.zeros(n, device=dev)     # furthest from spawn, m
     steps = torch.zeros(n, device=dev)
     rows = []
 
@@ -237,6 +243,8 @@ def main():
 
             up = gain >= up_th
             run = torch.where(up, run + 1, torch.zeros_like(run))
+            max_run = torch.maximum(max_run, run)
+            max_disp = torch.maximum(max_disp, disp)
             cleared |= (run >= hold_steps) & (disp >= a.min_xy)
 
             for k in (dones > 0.5).nonzero(as_tuple=False).flatten().tolist():
@@ -245,6 +253,8 @@ def main():
                     "max_gain_m": round(float(max_gain[k].item()), 4),
                     "energy_J": round(float(energy_j[k].item()), 2),
                     "steps": int(steps[k].item()),
+                    "hold_s": round(float(max_run[k].item()) * base.step_dt, 3),
+                    "max_disp_m": round(float(max_disp[k].item()), 3),
                 })
                 # reset this env's bookkeeping; it has already been respawned
                 spawn[k] = pos[k]
@@ -253,6 +263,8 @@ def main():
                 max_gain[k] = 0.0
                 steps[k] = 0.0
                 energy_j[k] = 0.0
+                max_run[k] = 0.0
+                max_disp[k] = 0.0
             if rows:
                 print("\r[climb] %d/%d" % (len(rows), a.episodes), end="", flush=True)
     print()
@@ -270,6 +282,17 @@ def main():
           % (a.out, 100 * frac, len(rows),
              ("  at h=%.0f cm" % (100 * a.step_height)) if a.step_height else
              "  (play terrain, gain >= %.3f m)" % a.clear_gain))
+    hs = [r["hold_s"] for r in rows]
+    dp = [r["max_disp_m"] for r in rows]
+    up_rows = [r for r in rows if r["max_gain_m"] >= up_th]
+    print("  of %d episodes reaching %.3f m: median hold %.2f s, median disp %.2f m"
+          % (len(up_rows), up_th,
+             st.median([r["hold_s"] for r in up_rows]) if up_rows else 0.0,
+             st.median([r["max_disp_m"] for r in up_rows]) if up_rows else 0.0))
+    print("  hold_s over all episodes: median %.2f  p90 %.2f  max %.2f s"
+          % (st.median(hs), sorted(hs)[int(0.9 * len(hs))], max(hs)))
+    print("  max_disp_m: median %.2f  p90 %.2f  max %.2f m"
+          % (st.median(dp), sorted(dp)[int(0.9 * len(dp))], max(dp)))
     print("  height gain: mean %.3f  median %.3f  p90 %.3f  max %.3f m"
           % (st.mean(g), st.median(g), sorted(g)[int(0.9 * len(g))], max(g)))
     if e:
