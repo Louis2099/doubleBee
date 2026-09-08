@@ -1,29 +1,31 @@
 """The energy sweep, two panels, from per-episode eval_climb output.
 
-    python3 fig_energy_tradeoff.py "climb_*.csv" -o fig_energy.pdf --riser 0.06
+    python3 fig_energy_tradeoff.py "climb_*.csv" -o fig_energy.pdf --step 0.06
 
 WHY TWO PANELS. A five-point line through averaged values hides the thing that
 actually matters: the arms differ in how OFTEN they climb, not only in how much
 they spend when they do. Pooling those into one J/m number charges a failed
 episode's energy against zero metres, which penalises a policy for attempting
-less rather than for being inefficient -- measured 2026-09-07, that made the
-most-penalised arm look worst (8156 J/m) when on the episodes where it climbed
-it was the best (5381 J/m).
+less rather than for being inefficient.
 
-  (a) every episode as a point, binned by HOW MANY RISERS IT CLEARED. Holding
+  (a) every episode as a point, binned by HOW MANY STEPS IT CLIMBED. Holding
       the work done fixed is what makes the energy numbers comparable: within a
       column every point did the same job, so the vertical spread between the
       colours is the penalty's effect and nothing else.
-  (b) the trade-off itself: how often it clears, against what it costs when it
+  (b) the trade-off itself: how often it climbs, against what it costs when it
       does. This is the aggregate of (a); the two are the same measurement at
       two zoom levels, which is why they belong side by side.
 
 Continuous "height gained" is deliberately gone. It rewards a policy for ending
-an episode mid-riser and it has no units the task cares about -- the robot
-either got up a step or it did not.
+an episode mid-step and it has no unit the task cares about -- the robot either
+got up a step or it did not.
 
-RISER COUNT. floor(max_gain_m / riser). Conservative: a body 11 cm above spawn
-on 6 cm risers counts as one, not two.
+STEP COUNT. floor(max_gain_m / step). Conservative: a body 11 cm above spawn on
+6 cm steps counts as one, not two.
+
+CLEARANCE RATES CARRY WILSON INTERVALS in the printed table. With n=200 and one
+seed a five-point difference between two arms is not a difference; the energy
+differences are far outside their intervals and the rates often are not.
 """
 import argparse
 import csv
@@ -37,8 +39,9 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
-CAP = 3          # risers beyond this are pooled into the "3+" column
+CAP = 3          # steps beyond this are pooled into the "3+" column
 
 
 def load(pattern):
@@ -69,12 +72,23 @@ def pareto(pts):
     return sorted(keep, key=lambda i: pts[i][0])
 
 
+def wilson(k, n, z=1.96):
+    """95% interval on a rate, in percent. Normal approx is wrong at these n."""
+    if n == 0:
+        return 0.0, 0.0
+    p = k / float(n)
+    d = 1.0 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * np.sqrt(p * (1 - p) / n + z * z / (4.0 * n * n)) / d
+    return 100 * max(0.0, c - h), 100 * min(1.0, c + h)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("pattern", nargs="?", default="climb_*.csv")
     p.add_argument("-o", "--out", default="fig_energy.pdf")
-    p.add_argument("--riser", type=float, default=0.06,
-                   help="riser height the staircase was pinned to, m")
+    p.add_argument("--step", "--riser", dest="step", type=float, default=0.06,
+                   help="step height the staircase was pinned to, m")
     p.add_argument("--min_n", type=int, default=5,
                    help="cells with fewer episodes than this get no mean marker")
     a = p.parse_args()
@@ -90,19 +104,22 @@ def main():
     # ---- (a) every episode, columns of equal work --------------------------
     dx = 0.78 / n
     offs = (np.arange(n) - (n - 1) / 2.0) * dx
-    counts = np.zeros((n, CAP + 1), dtype=int)
+    handles = []
 
     for i, ((tag, w, g, e), c) in enumerate(zip(arms, cmap)):
-        r = np.minimum(np.floor(g / a.riser + 1e-9).astype(int), CAP)
+        r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
         lab = "$w_E$=%g" % w if w == w else tag
+        # The legend swatch is drawn separately at full opacity. Inheriting the
+        # scatter's alpha=0.22 made the legend unreadable at print size.
+        handles.append(Line2D([0], [0], marker="o", ls="none", ms=5.5,
+                              color=c, mec="0.15", mew=0.8, label=lab))
         for k in range(CAP + 1):
             m = r == k
-            counts[i, k] = m.sum()
             if not m.any():
                 continue
             x = k + offs[i] + rng.uniform(-0.30 * dx, 0.30 * dx, m.sum())
             ax[0].scatter(x, e[m], s=7, alpha=0.22, color=c, linewidths=0,
-                          label=lab if k == 0 else None, zorder=2)
+                          zorder=2)
             if m.sum() >= a.min_n:
                 ax[0].errorbar(k + offs[i], e[m].mean(), yerr=e[m].std(),
                                fmt="o", ms=5.5, color=c, ecolor=c,
@@ -113,22 +130,23 @@ def main():
     ax[0].set_xticks(range(CAP + 1))
     ax[0].set_xticklabels([str(k) for k in range(CAP)] + ["%d+" % CAP])
     ax[0].set_xlim(-0.5 - dx, CAP + 0.5 + dx)
-    ax[0].set_xlabel("risers cleared (%.0f cm each)" % (100 * a.riser))
+    ax[0].set_xlabel("steps climbed (%.0f cm each)" % (100 * a.step))
     ax[0].set_ylabel("energy per episode (J)")
-    ax[0].set_title("(a) every episode, grouped by work done",
+    ax[0].set_title("(a) energy per episode, at equal work",
                     fontsize=9, loc="left")
-    ax[0].legend(fontsize=7, loc="upper left", framealpha=0.9, ncol=2)
+    ax[0].legend(handles=handles, fontsize=7, loc="upper left",
+                 framealpha=0.9, ncol=2)
     ax[0].grid(alpha=0.25, axis="y")
 
     # ---- (b) the trade-off, which is (a) aggregated ------------------------
     pts, labs, cols = [], [], []
     for (tag, w, g, e), c in zip(arms, cmap):
-        m = g >= a.riser
+        m = g >= a.step
         if m.sum() < 3:
-            print("  %s: only %d episodes cleared, omitted from (b)" % (tag, m.sum()))
+            print("  %s: only %d episodes climbed, omitted from (b)" % (tag, m.sum()))
             continue
-        # x axis is ENERGY PER RISER CLEARED, not J/m. Every episode faces the
-        # same riser, so "what one step costs" is the interpretable quantity;
+        # x axis is ENERGY PER STEP CLIMBED, not J/m. Every episode faces the
+        # same step, so "what one step costs" is the interpretable quantity;
         # dividing by a fractional metre is not.
         pts.append((e[m].mean(), 100.0 * m.mean()))
         labs.append("%g" % w if w == w else tag)
@@ -137,13 +155,29 @@ def main():
         front = pareto(pts)
         ax[1].plot([pts[i][0] for i in front], [pts[i][1] for i in front],
                    "-", color="0.55", lw=1.2, zorder=1, label="Pareto front")
-        for (c_, r_), lab, col in zip(pts, labs, cols):
+        for (c_, r_), col in zip(pts, cols):
             ax[1].scatter([c_], [r_], s=95, color=col, zorder=3,
                           edgecolors="white", linewidths=1.2)
-            ax[1].annotate("$w_E$=%s" % lab, xy=(c_, r_), xytext=(6, 5),
-                           textcoords="offset points", fontsize=8)
-        ax[1].set_xlabel("energy per riser cleared (J)")
-        ax[1].set_ylabel("episodes clearing a riser (%)")
+
+        # Pad the axes BEFORE annotating, then push each label towards the
+        # middle of the panel. Labels placed with a fixed offset walked off the
+        # right edge for whichever arm happened to be most expensive.
+        xs = [q[0] for q in pts]
+        ys = [q[1] for q in pts]
+        xpad = 0.16 * (max(xs) - min(xs) or 1.0)
+        ypad = 0.16 * (max(ys) - min(ys) or 1.0)
+        ax[1].set_xlim(min(xs) - xpad, max(xs) + xpad)
+        ax[1].set_ylim(min(ys) - ypad, max(ys) + ypad)
+        xmid = 0.5 * sum(ax[1].get_xlim())
+        ymid = 0.5 * sum(ax[1].get_ylim())
+        for (c_, r_), lab in zip(pts, labs):
+            ox, ha = (-8, "right") if c_ > xmid else (8, "left")
+            oy, va = (-3, "top") if r_ > ymid else (5, "bottom")
+            ax[1].annotate("$w_E$=%s" % lab, xy=(c_, r_), xytext=(ox, oy),
+                           textcoords="offset points", fontsize=8,
+                           ha=ha, va=va)
+        ax[1].set_xlabel("energy per step climbed (J)")
+        ax[1].set_ylabel("episodes climbing a step (%)")
         ax[1].legend(fontsize=7, loc="lower right")
     ax[1].set_title("(b) reliability against cost", fontsize=9, loc="left")
     ax[1].grid(alpha=0.25)
@@ -155,10 +189,10 @@ def main():
 
     # ---- the numbers behind (a): mean J in each column ---------------------
     head = ["%d" % k for k in range(CAP)] + ["%d+" % CAP]
-    print("\nmean energy per episode (J), by risers cleared   [n in brackets]")
+    print("\nmean energy per episode (J), by steps climbed   [n in brackets]")
     print("%-8s %s" % ("wE", " ".join("%14s" % h for h in head)))
-    for i, (tag, w, g, e) in enumerate(arms):
-        r = np.minimum(np.floor(g / a.riser + 1e-9).astype(int), CAP)
+    for tag, w, g, e in arms:
+        r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
         cells = []
         for k in range(CAP + 1):
             m = r == k
@@ -167,14 +201,15 @@ def main():
         print("%-8s %s" % (("%g" % w if w == w else tag),
                            " ".join("%14s" % c for c in cells)))
 
-    print("\n%-8s %5s %8s %12s %11s" %
-          ("wE", "n", "clear%", "E/riser(J)", "risers_med"))
+    print("\n%-8s %5s %20s %12s %11s" %
+          ("wE", "n", "climb% [95% Wilson]", "E/step(J)", "steps_med"))
     for tag, w, g, e in arms:
-        m = g >= a.riser
+        m = g >= a.step
         ok = m.sum() >= 3
-        r = np.floor(g / a.riser + 1e-9)
-        print("%-8s %5d %7.0f%% %12s %11.0f"
-              % (("%g" % w if w == w else tag), len(g), 100 * m.mean(),
+        lo, hi = wilson(int(m.sum()), len(g))
+        r = np.floor(g / a.step + 1e-9)
+        print("%-8s %5d %10.0f%% [%2.0f, %2.0f] %12s %11.0f"
+              % (("%g" % w if w == w else tag), len(g), 100 * m.mean(), lo, hi,
                  "%.0f" % e[m].mean() if ok else "-", np.median(r)))
 
 
