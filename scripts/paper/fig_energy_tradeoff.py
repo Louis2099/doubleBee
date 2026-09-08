@@ -45,7 +45,7 @@ CAP = 3          # steps beyond this are pooled into the "3+" column
 
 
 def load(pattern):
-    """[(tag, weight, gain[], energy[])], ordered by weight."""
+    """[(tag, weight, gain[], energy[], cleared[])], ordered by weight."""
     out = []
     for path in sorted(glob.glob(pattern)):
         recs = list(csv.DictReader(open(path)))
@@ -56,7 +56,8 @@ def load(pattern):
         w = float(m.group(1)) if m else float("nan")
         out.append((tag, w,
                     np.array([float(r["max_gain_m"]) for r in recs]),
-                    np.array([float(r["energy_J"]) for r in recs])))
+                    np.array([float(r["energy_J"]) for r in recs]),
+                    np.array([int(float(r.get("cleared", 0))) for r in recs], bool)))
     if not out:
         sys.exit("no CSVs matched %r" % pattern)
     return sorted(out, key=lambda z: (np.isnan(z[1]), z[1]))
@@ -89,6 +90,11 @@ def main():
     p.add_argument("-o", "--out", default="fig_energy.pdf")
     p.add_argument("--step", "--riser", dest="step", type=float, default=0.06,
                    help="step height the staircase was pinned to, m")
+    p.add_argument("--rate", choices=("cleared", "gain"), default="cleared",
+                   help="'cleared' = eval_climb's own column: height held for "
+                        "--hold seconds while covering --min-xy metres. 'gain' = "
+                        "a bare max_gain_m threshold, which counts a momentary "
+                        "thrust-driven altitude peak as a climb. Use 'cleared'.")
     p.add_argument("--min_n", type=int, default=5,
                    help="cells with fewer episodes than this get no mean marker")
     a = p.parse_args()
@@ -106,7 +112,7 @@ def main():
     offs = (np.arange(n) - (n - 1) / 2.0) * dx
     handles = []
 
-    for i, ((tag, w, g, e), c) in enumerate(zip(arms, cmap)):
+    for i, ((tag, w, g, e, cl), c) in enumerate(zip(arms, cmap)):
         r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
         lab = "$w_E$=%g" % w if w == w else tag
         # The legend swatch is drawn separately at full opacity. Inheriting the
@@ -140,8 +146,8 @@ def main():
 
     # ---- (b) the trade-off, which is (a) aggregated ------------------------
     pts, labs, cols = [], [], []
-    for (tag, w, g, e), c in zip(arms, cmap):
-        m = g >= a.step
+    for (tag, w, g, e, cl), c in zip(arms, cmap):
+        m = cl if a.rate == "cleared" else (g >= a.step)
         if m.sum() < 3:
             print("  %s: only %d episodes climbed, omitted from (b)" % (tag, m.sum()))
             continue
@@ -177,7 +183,8 @@ def main():
                            textcoords="offset points", fontsize=8,
                            ha=ha, va=va)
         ax[1].set_xlabel("energy per step climbed (J)")
-        ax[1].set_ylabel("episodes climbing a step (%)")
+        ax[1].set_ylabel("episodes climbing a step (%)" if a.rate == "cleared"
+                         else "episodes exceeding %.0f cm (%%)" % (100 * a.step))
         ax[1].legend(fontsize=7, loc="lower right")
     ax[1].set_title("(b) reliability against cost", fontsize=9, loc="left")
     ax[1].grid(alpha=0.25)
@@ -191,7 +198,7 @@ def main():
     head = ["%d" % k for k in range(CAP)] + ["%d+" % CAP]
     print("\nmean energy per episode (J), by steps climbed   [n in brackets]")
     print("%-8s %s" % ("wE", " ".join("%14s" % h for h in head)))
-    for tag, w, g, e in arms:
+    for tag, w, g, e, cl in arms:
         r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
         cells = []
         for k in range(CAP + 1):
@@ -201,16 +208,21 @@ def main():
         print("%-8s %s" % (("%g" % w if w == w else tag),
                            " ".join("%14s" % c for c in cells)))
 
-    print("\n%-8s %5s %20s %12s %11s" %
-          ("wE", "n", "climb% [95% Wilson]", "E/step(J)", "steps_med"))
-    for tag, w, g, e in arms:
-        m = g >= a.step
+
+    print("climb%% = held %s. peak>h%% = bare max_gain threshold, no hold, no\n"
+          "  displacement -- the gap between the two columns is thrust spikes."
+          % "0.5 s over 0.35 m (eval_climb's cleared column)")
+    print("\n%-8s %5s %20s %12s %9s %11s" %
+          ("wE", "n", "climb% [95% Wilson]", "E/step(J)", "peak>h%", "steps_med"))
+    for tag, w, g, e, cl in arms:
+        m = cl if a.rate == "cleared" else (g >= a.step)
         ok = m.sum() >= 3
         lo, hi = wilson(int(m.sum()), len(g))
         r = np.floor(g / a.step + 1e-9)
-        print("%-8s %5d %10.0f%% [%2.0f, %2.0f] %12s %11.0f"
+        print("%-8s %5d %10.0f%% [%2.0f, %2.0f] %12s %8.0f%% %11.0f"
               % (("%g" % w if w == w else tag), len(g), 100 * m.mean(), lo, hi,
-                 "%.0f" % e[m].mean() if ok else "-", np.median(r)))
+                 "%.0f" % e[m].mean() if ok else "-",
+                 100 * (g >= a.step).mean(), np.median(r)))
 
 
 if __name__ == "__main__":
