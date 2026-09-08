@@ -211,6 +211,15 @@ def main():
     # it means "got up at least one real step" across the whole curriculum.
     up_th = (a.frac * a.step_height) if a.step_height is not None else a.clear_gain
 
+    # WHY each episode ends. Mean ep_len is ~110 of 1000 steps, so essentially
+    # every episode terminates rather than running out the 20 s horizon, and a
+    # fall and a goal arrival are opposite outcomes that look identical in a
+    # dones flag. Read the termination manager per step and keep the first term
+    # that fired. Wrapped, because a missing manager must not kill the eval.
+    tmgr = getattr(base, "termination_manager", None)
+    term_names = list(getattr(tmgr, "active_terms", []) or [])
+    print("[climb] termination terms: %s" % (", ".join(term_names) or "none"))
+
     robot = base.scene["robot"]
     spawn = robot.data.root_pos_w.clone()
     energy_j = torch.zeros(n, device=dev)     # our own integral of the power model
@@ -223,6 +232,7 @@ def main():
     # 2026-09-05 and there was no way to tell a spike from a closed hold window.
     max_run = torch.zeros(n, device=dev)      # longest continuous hold, steps
     max_disp = torch.zeros(n, device=dev)     # furthest from spawn, m
+    why = ["?"] * n                           # termination term that fired
     steps = torch.zeros(n, device=dev)
     rows = []
 
@@ -247,6 +257,16 @@ def main():
             max_disp = torch.maximum(max_disp, disp)
             cleared |= (run >= hold_steps) & (disp >= a.min_xy)
 
+            if term_names:
+                try:
+                    for nm in term_names:
+                        f = tmgr.get_term(nm)
+                        for k in f.nonzero(as_tuple=False).flatten().tolist():
+                            if why[k] == "?":
+                                why[k] = nm
+                except Exception:
+                    term_names = []
+
             for k in (dones > 0.5).nonzero(as_tuple=False).flatten().tolist():
                 rows.append({
                     "cleared": int(cleared[k].item()),
@@ -255,6 +275,7 @@ def main():
                     "steps": int(steps[k].item()),
                     "hold_s": round(float(max_run[k].item()) * base.step_dt, 3),
                     "max_disp_m": round(float(max_disp[k].item()), 3),
+                    "end": why[k],
                 })
                 # reset this env's bookkeeping; it has already been respawned
                 spawn[k] = pos[k]
@@ -265,6 +286,7 @@ def main():
                 energy_j[k] = 0.0
                 max_run[k] = 0.0
                 max_disp[k] = 0.0
+                why[k] = "?"
             if rows:
                 print("\r[climb] %d/%d" % (len(rows), a.episodes), end="", flush=True)
     print()
@@ -282,6 +304,16 @@ def main():
           % (a.out, 100 * frac, len(rows),
              ("  at h=%.0f cm" % (100 * a.step_height)) if a.step_height else
              "  (play terrain, gain >= %.3f m)" % a.clear_gain))
+    from collections import Counter
+    ends = Counter(r["end"] for r in rows)
+    max_ep = int(round(base.max_episode_length))
+    print("  episode length: mean %.0f of %d steps (%.1f s of %.1f s horizon)"
+          % (st.mean([r["steps"] for r in rows]), max_ep,
+             st.mean([r["steps"] for r in rows]) * base.step_dt,
+             max_ep * base.step_dt))
+    print("  how episodes ended: %s"
+          % ("  ".join("%s %.0f%%" % (k, 100.0 * v / len(rows))
+                       for k, v in ends.most_common())))
     hs = [r["hold_s"] for r in rows]
     dp = [r["max_disp_m"] for r in rows]
     up_rows = [r for r in rows if r["max_gain_m"] >= up_th]
