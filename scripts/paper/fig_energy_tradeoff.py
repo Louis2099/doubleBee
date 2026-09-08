@@ -67,6 +67,29 @@ def load(pattern):
     return sorted(out, key=lambda z: (np.isnan(z[1]), z[1]))
 
 
+def group(arms):
+    """[(weight, label, [per-file tuples])] -- one entry per WEIGHT, not per file.
+
+    With one CSV per checkpoint, each weight has many files. Measured
+    2026-09-08, a single arm's median max_gain swung 0.047 -> 0.082 m across
+    three consecutive checkpoints, a 74% swing that exceeded the entire spread
+    between all five weights at any one checkpoint. Reporting a single
+    checkpoint therefore reports where the snapshot landed. Pool them.
+    """
+    out = {}
+    for arm in arms:
+        out.setdefault(arm[1], []).append(arm)
+    keys = sorted(out, key=lambda w: (np.isnan(w), w))
+    return [(w, ("$w_E$=%g" % w if w == w else out[w][0][0]), out[w]) for w in keys]
+
+
+def pooled(files):
+    """Concatenate every checkpoint's episodes into one sample."""
+    cat = lambda i: np.concatenate([f[i] for f in files])
+    return (cat(2), cat(3), cat(4), cat(5), cat(6), cat(7),
+            [x for f in files for x in f[8]])
+
+
 def pareto(pts):
     """Indices on the upper-left frontier of (cost, benefit): cheaper and better."""
     keep = []
@@ -130,7 +153,11 @@ def main():
     a = p.parse_args()
 
     arms = load(a.pattern)
-    n = len(arms)
+    groups = group(arms)
+    n = len(groups)
+    nck = max(len(f) for _, _, f in groups)
+    print("%d weights, up to %d checkpoints each, %d episodes total"
+          % (n, nck, sum(len(f[2]) for arm in arms for f in [arm])))
     cmap = plt.cm.viridis(np.linspace(0.05, 0.85, n))
     rng = np.random.default_rng(0)
 
@@ -142,9 +169,9 @@ def main():
     offs = (np.arange(n) - (n - 1) / 2.0) * dx
     handles = []
 
-    for i, ((tag, w, g, e, cl, hs, dp, eg, en), c) in enumerate(zip(arms, cmap)):
+    for i, ((w, lab, files), c) in enumerate(zip(groups, cmap)):
+        g, e, cl, hs, dp, eg, en = pooled(files)
         r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
-        lab = "$w_E$=%g" % w if w == w else tag
         # The legend swatch is drawn separately at full opacity. Inheriting the
         # scatter's alpha=0.22 made the legend unreadable at print size.
         handles.append(Line2D([0], [0], marker="o", ls="none", ms=5.5,
@@ -175,31 +202,44 @@ def main():
     ax[0].grid(alpha=0.25, axis="y")
 
     # ---- (b) the trade-off, which is (a) aggregated ------------------------
-    pts, labs, cols = [], [], []
-    for (tag, w, g, e, cl, hs, dp, eg, en), c in zip(arms, cmap):
-        m = climbed(g, hs, dp, eg, a.step, a.hold_s, a.min_xy)
-        if m.sum() < 3:
-            print("  %s: only %d episodes climbed, omitted from (b)" % (tag, m.sum()))
+    pts, labs, cols, errs = [], [], [], []
+    for (w, lab, files), c in zip(groups, cmap):
+        # One (cost, rate) per CHECKPOINT, then mean and sd across them. The
+        # error bars are the honest statement of what a single-checkpoint number
+        # was hiding; they are checkpoint spread, not seed spread, and the
+        # caption has to say so.
+        per = []
+        for f in files:
+            _, _, gi, ei, cli, hsi, dpi, egi, eni = f
+            mi = climbed(gi, hsi, dpi, egi, a.step, a.hold_s, a.min_xy)
+            if mi.sum() >= 3:
+                per.append((ei[mi].mean(), 100.0 * mi.mean()))
+        if not per:
+            print("  %s: no checkpoint had 3 episodes reaching the height" % lab)
             continue
-        # x axis is ENERGY PER STEP CLIMBED, not J/m. Every episode faces the
-        # same step, so "what one step costs" is the interpretable quantity;
-        # dividing by a fractional metre is not.
-        pts.append((e[m].mean(), 100.0 * m.mean()))
-        labs.append("%g" % w if w == w else tag)
+        cst = np.array([q[0] for q in per])
+        rte = np.array([q[1] for q in per])
+        pts.append((cst.mean(), rte.mean()))
+        errs.append((cst.std(), rte.std()))
+        labs.append("%g" % w if w == w else lab)
         cols.append(c)
     if pts:
         front = pareto(pts)
         ax[1].plot([pts[i][0] for i in front], [pts[i][1] for i in front],
                    "-", color="0.55", lw=1.2, zorder=1, label="Pareto front")
-        for (c_, r_), col in zip(pts, cols):
+        for (c_, r_), (ce, re_), col in zip(pts, errs, cols):
+            ax[1].errorbar([c_], [r_], xerr=[ce], yerr=[re_], fmt="none",
+                           ecolor=col, elinewidth=1.3, capsize=3, zorder=2)
             ax[1].scatter([c_], [r_], s=95, color=col, zorder=3,
                           edgecolors="white", linewidths=1.2)
 
         # Pad the axes BEFORE annotating, then push each label towards the
         # middle of the panel. Labels placed with a fixed offset walked off the
         # right edge for whichever arm happened to be most expensive.
-        xs = [q[0] for q in pts]
-        ys = [q[1] for q in pts]
+        xs = [q[0] + s_ for q, (s_, _) in zip(pts, errs)] + \
+             [q[0] - s_ for q, (s_, _) in zip(pts, errs)]
+        ys = [q[1] + s_ for q, (_, s_) in zip(pts, errs)] + \
+             [q[1] - s_ for q, (_, s_) in zip(pts, errs)]
         xpad = 0.16 * (max(xs) - min(xs) or 1.0)
         ypad = 0.16 * (max(ys) - min(ys) or 1.0)
         ax[1].set_xlim(min(xs) - xpad, max(xs) + xpad)
@@ -239,14 +279,15 @@ def main():
     head = ["%d" % k for k in range(CAP)] + ["%d+" % CAP]
     print("\nmean energy per episode (J), by steps climbed   [n in brackets]")
     print("%-8s %s" % ("wE", " ".join("%14s" % h for h in head)))
-    for tag, w, g, e, cl, hs, dp, eg, en in arms:
+    for w, lab, files in groups:
+        g, e, cl, hs, dp, eg, en = pooled(files)
         r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
         cells = []
         for k in range(CAP + 1):
             m = r == k
             cells.append("%9.0f [%3d]" % (e[m].mean(), m.sum()) if m.sum()
                          else "%14s" % "-")
-        print("%-8s %s" % (("%g" % w if w == w else tag),
+        print("%-8s %s" % (("%g" % w if w == w else lab),
                            " ".join("%14s" % c for c in cells)))
 
 
@@ -254,19 +295,29 @@ def main():
           % (100 * a.step))
     print("in a tilt termination -- the honest qualifier for the caption.")
 
-    print("\n%-8s %5s %20s %12s %8s %9s" %
-          ("wE", "n", "reach% [95% Wilson]", "E_reach(J)", "tilt%", "gain_med"))
-    for tag, w, g, e, cl, hs, dp, eg, en in arms:
+    print("\n%-8s %5s %5s %18s %16s %8s %9s" %
+          ("wE", "ckpt", "n", "reach% mean+-sd", "E_reach(J)+-sd", "tilt%",
+           "gain_med"))
+    print("  +-sd is spread across CHECKPOINTS of one run, not across seeds.")
+    for w, lab, files in groups:
+        g, e, cl, hs, dp, eg, en = pooled(files)
         m = climbed(g, hs, dp, eg, a.step, a.hold_s, a.min_xy)
-        ok = m.sum() >= 3
-        lo, hi = wilson(int(m.sum()), len(g))
-        r = np.floor(g / a.step + 1e-9)
+        rts, cst = [], []
+        for f in files:
+            _, _, gi, ei, cli, hsi, dpi, egi, eni = f
+            mi = climbed(gi, hsi, dpi, egi, a.step, a.hold_s, a.min_xy)
+            rts.append(100.0 * mi.mean())
+            if mi.sum() >= 3:
+                cst.append(ei[mi].mean())
         idx = np.nonzero(m)[0]
         tilt = (100.0 * sum(1 for i in idx if en[i] == "tilt") / len(idx)
                 if len(idx) else float("nan"))
-        print("%-8s %5d %10.0f%% [%2.0f, %2.0f] %12s %7.0f%% %9.3f"
-              % (("%g" % w if w == w else tag), len(g), 100 * m.mean(), lo, hi,
-                 "%.0f" % e[m].mean() if ok else "-", tilt, np.median(g)))
+        print("%-8s %5d %5d %9.0f%% +-%-5.1f %8.0f +-%-5.0f %7.0f%% %9.3f"
+              % (("%g" % w if w == w else lab), len(files), len(g),
+                 np.mean(rts), np.std(rts),
+                 np.mean(cst) if cst else float("nan"),
+                 np.std(cst) if cst else float("nan"),
+                 tilt, np.median(g)))
 
 
     # How much of the answer is the hold threshold? If the ranking flips across
@@ -275,10 +326,12 @@ def main():
         holds = [0.0, 0.10, 0.25, 0.50]
         print("\nsensitivity: climb%% vs required hold, at disp >= %.2f m" % a.min_xy)
         print("%-8s %s" % ("wE", " ".join("%9s" % ("%.2fs" % h) for h in holds)))
-        for tag, w, g, e, cl, hs, dp, eg, en in arms:
-            cells = ["%8.0f%%" % (100 * climbed(g, hs, dp, eg, a.step, h, a.min_xy).mean())
+        for w, lab, files in groups:
+            g, e, cl, hs, dp, eg, en = pooled(files)
+            cells = ["%8.0f%%" % (100 * climbed(g, hs, dp, eg, a.step, h,
+                                                a.min_xy).mean())
                      for h in holds]
-            print("%-8s %s" % (("%g" % w if w == w else tag),
+            print("%-8s %s" % (("%g" % w if w == w else lab),
                                " ".join("%9s" % c for c in cells)))
 
 
