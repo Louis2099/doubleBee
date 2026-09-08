@@ -45,7 +45,7 @@ CAP = 3          # steps beyond this are pooled into the "3+" column
 
 
 def load(pattern):
-    """[(tag, weight, gain[], energy[], cleared[], hold_s[], disp[], end_gain[])]."""
+    """[(tag, w, gain[], energy[], cleared[], hold_s[], disp[], end_gain[], end[])]."""
     out = []
     for path in sorted(glob.glob(pattern)):
         recs = list(csv.DictReader(open(path)))
@@ -60,7 +60,8 @@ def load(pattern):
                     np.array([int(float(r.get("cleared", 0))) for r in recs], bool),
                     np.array([float(r.get("hold_s", "nan")) for r in recs]),
                     np.array([float(r.get("max_disp_m", "nan")) for r in recs]),
-                    np.array([float(r.get("end_gain_m", "nan")) for r in recs])))
+                    np.array([float(r.get("end_gain_m", "nan")) for r in recs]),
+                    [r.get("end", "?") for r in recs]))
     if not out:
         sys.exit("no CSVs matched %r" % pattern)
     return sorted(out, key=lambda z: (np.isnan(z[1]), z[1]))
@@ -77,27 +78,24 @@ def pareto(pts):
 
 
 def climbed(g, hs, dp, eg, step, hold_s, min_xy):
-    """Got a step up and STAYED up, while actually going somewhere.
+    """Peak height reached. Nothing more is claimed, because nothing more is
+    supported.
 
-    Measured 2026-09-08 on 20 episodes with termination reasons: of the eight
-    episodes that ended >= 6 cm up, seven ended in `tilt` or
-    `propeller_collision`. end_gain_m at a tilt termination is the height at
-    the instant the fall fires, because a robot pitching over a step edge has a
-    raised base -- so "ended a step up" counts mid-fall snapshots as climbs.
-    6d2c6b6 used it as the criterion and was wrong.
+    This measured `max_gain >= step` all along; earlier versions LABELLED it
+    "cleared a riser", which it is not. Measured 2026-09-08, 50-93% of episodes
+    end in a `tilt` termination, and a robot pitching over a step edge raises
+    its base -- so some episodes reaching 6 cm are mid-tip, not stood up on a
+    step. The number is real; the word was wrong. Axis labels now say "reaching
+    6 cm" and the table reports what fraction of those ended in a tilt, which is
+    the honest qualifier and belongs in the caption.
 
-    hold_s, the longest continuous time above 0.8*step, is what separates a
-    sustained climb from a snapshot: the genuine rows held 0.38-0.76 s while
-    the mid-fall rows held 0.02-0.10 s. It is sensitive -- 25% at 0.25 s
-    against 10% at 0.50 s on that sample -- so the figure prints the sweep and
-    the paper has to state which value it used.
-
-    end_gain_m stays in the CSV as a diagnostic; it is not the criterion.
+    --hold_s and --min_xy default to 0 (off) so the default is exactly the
+    labelled quantity. Raise either to test sensitivity.
     """
     m = g >= step
-    if np.isfinite(hs).any():
+    if hold_s > 0 and np.isfinite(hs).any():
         m &= (hs >= hold_s)
-    if np.isfinite(dp).any():
+    if min_xy > 0 and np.isfinite(dp).any():
         m &= (dp >= min_xy)
     return m
 
@@ -119,13 +117,13 @@ def main():
     p.add_argument("-o", "--out", default="fig_energy.pdf")
     p.add_argument("--step", "--riser", dest="step", type=float, default=0.06,
                    help="step height the staircase was pinned to, m")
-    p.add_argument("--hold_s", type=float, default=0.25,
+    p.add_argument("--hold_s", type=float, default=0.0,
                    help="seconds the height must be held. A bare height "
                         "threshold counts a momentary tip or thrust spike as a "
                         "climb; eval_climb's own 0.5 s is so strict it fired on "
                         "0.5%% of episodes. Sweep it -- the table prints the "
                         "sensitivity -- and state what you used.")
-    p.add_argument("--min_xy", type=float, default=0.35,
+    p.add_argument("--min_xy", type=float, default=0.0,
                    help="metres from spawn, so hovering in place is not a climb")
     p.add_argument("--min_n", type=int, default=5,
                    help="cells with fewer episodes than this get no mean marker")
@@ -144,7 +142,7 @@ def main():
     offs = (np.arange(n) - (n - 1) / 2.0) * dx
     handles = []
 
-    for i, ((tag, w, g, e, cl, hs, dp, eg), c) in enumerate(zip(arms, cmap)):
+    for i, ((tag, w, g, e, cl, hs, dp, eg, en), c) in enumerate(zip(arms, cmap)):
         r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
         lab = "$w_E$=%g" % w if w == w else tag
         # The legend swatch is drawn separately at full opacity. Inheriting the
@@ -168,9 +166,9 @@ def main():
     ax[0].set_xticks(range(CAP + 1))
     ax[0].set_xticklabels([str(k) for k in range(CAP)] + ["%d+" % CAP])
     ax[0].set_xlim(-0.5 - dx, CAP + 0.5 + dx)
-    ax[0].set_xlabel("steps climbed (%.0f cm each)" % (100 * a.step))
+    ax[0].set_xlabel("peak height reached (%.0f cm bins)" % (100 * a.step))
     ax[0].set_ylabel("energy per episode (J)")
-    ax[0].set_title("(a) energy per episode, at equal work",
+    ax[0].set_title("(a) energy per episode, by height reached",
                     fontsize=9, loc="left")
     ax[0].legend(handles=handles, fontsize=7, loc="upper left",
                  framealpha=0.9, ncol=2)
@@ -178,7 +176,7 @@ def main():
 
     # ---- (b) the trade-off, which is (a) aggregated ------------------------
     pts, labs, cols = [], [], []
-    for (tag, w, g, e, cl, hs, dp, eg), c in zip(arms, cmap):
+    for (tag, w, g, e, cl, hs, dp, eg, en), c in zip(arms, cmap):
         m = climbed(g, hs, dp, eg, a.step, a.hold_s, a.min_xy)
         if m.sum() < 3:
             print("  %s: only %d episodes climbed, omitted from (b)" % (tag, m.sum()))
@@ -208,14 +206,26 @@ def main():
         ax[1].set_ylim(min(ys) - ypad, max(ys) + ypad)
         xmid = 0.5 * sum(ax[1].get_xlim())
         ymid = 0.5 * sum(ax[1].get_ylim())
+        # Two arms with near-identical (cost, rate) collide -- wE=0 at
+        # (783, 42%) and wE=2 at (805, 44%) overlapped on 2026-09-08. Flip the
+        # vertical side for a label whose point is close to one already placed.
+        xlo, xhi = ax[1].get_xlim()
+        ylo, yhi = ax[1].get_ylim()
+        placed = []
         for (c_, r_), lab in zip(pts, labs):
+            fx = (c_ - xlo) / (xhi - xlo)
+            fy = (r_ - ylo) / (yhi - ylo)
             ox, ha = (-8, "right") if c_ > xmid else (8, "left")
-            oy, va = (-3, "top") if r_ > ymid else (5, "bottom")
+            up = r_ <= ymid
+            if any((fx - px) ** 2 + (fy - py) ** 2 < 0.11 ** 2 for px, py in placed):
+                up = not up
+            oy, va = (5, "bottom") if up else (-3, "top")
             ax[1].annotate("$w_E$=%s" % lab, xy=(c_, r_), xytext=(ox, oy),
                            textcoords="offset points", fontsize=8,
                            ha=ha, va=va)
-        ax[1].set_xlabel("energy per step climbed (J)")
-        ax[1].set_ylabel("episodes climbing a step (%)")
+            placed.append((fx, fy))
+        ax[1].set_xlabel("energy per episode reaching %.0f cm (J)" % (100 * a.step))
+        ax[1].set_ylabel("episodes reaching %.0f cm (%%)" % (100 * a.step))
         ax[1].legend(fontsize=7, loc="lower right")
     ax[1].set_title("(b) reliability against cost", fontsize=9, loc="left")
     ax[1].grid(alpha=0.25)
@@ -229,7 +239,7 @@ def main():
     head = ["%d" % k for k in range(CAP)] + ["%d+" % CAP]
     print("\nmean energy per episode (J), by steps climbed   [n in brackets]")
     print("%-8s %s" % ("wE", " ".join("%14s" % h for h in head)))
-    for tag, w, g, e, cl, hs, dp, eg in arms:
+    for tag, w, g, e, cl, hs, dp, eg, en in arms:
         r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
         cells = []
         for k in range(CAP + 1):
@@ -240,21 +250,23 @@ def main():
                            " ".join("%14s" % c for c in cells)))
 
 
-    print("climb%% = reached %.0f cm, HELD %.2f s, displaced %.2f m."
-          % (100 * a.step, a.hold_s, a.min_xy))
-    print("peak>h% = bare height threshold, no hold, no displacement. The gap")
-    print("between the two columns is tips and thrust spikes.")
-    print("\n%-8s %5s %20s %12s %9s %11s" %
-          ("wE", "n", "climb% [95% Wilson]", "E/step(J)", "peak>h%", "steps_med"))
-    for tag, w, g, e, cl, hs, dp, eg in arms:
+    print("reach%% = max_gain >= %.0f cm. tilt%% = of those, the fraction ending"
+          % (100 * a.step))
+    print("in a tilt termination -- the honest qualifier for the caption.")
+
+    print("\n%-8s %5s %20s %12s %8s %9s" %
+          ("wE", "n", "reach% [95% Wilson]", "E_reach(J)", "tilt%", "gain_med"))
+    for tag, w, g, e, cl, hs, dp, eg, en in arms:
         m = climbed(g, hs, dp, eg, a.step, a.hold_s, a.min_xy)
         ok = m.sum() >= 3
         lo, hi = wilson(int(m.sum()), len(g))
         r = np.floor(g / a.step + 1e-9)
-        print("%-8s %5d %10.0f%% [%2.0f, %2.0f] %12s %8.0f%% %11.0f"
+        idx = np.nonzero(m)[0]
+        tilt = (100.0 * sum(1 for i in idx if en[i] == "tilt") / len(idx)
+                if len(idx) else float("nan"))
+        print("%-8s %5d %10.0f%% [%2.0f, %2.0f] %12s %7.0f%% %9.3f"
               % (("%g" % w if w == w else tag), len(g), 100 * m.mean(), lo, hi,
-                 "%.0f" % e[m].mean() if ok else "-",
-                 100 * (g >= a.step).mean(), np.median(r)))
+                 "%.0f" % e[m].mean() if ok else "-", tilt, np.median(g)))
 
 
     # How much of the answer is the hold threshold? If the ranking flips across
@@ -263,7 +275,7 @@ def main():
         holds = [0.0, 0.10, 0.25, 0.50]
         print("\nsensitivity: climb%% vs required hold, at disp >= %.2f m" % a.min_xy)
         print("%-8s %s" % ("wE", " ".join("%9s" % ("%.2fs" % h) for h in holds)))
-        for tag, w, g, e, cl, hs, dp, eg in arms:
+        for tag, w, g, e, cl, hs, dp, eg, en in arms:
             cells = ["%8.0f%%" % (100 * climbed(g, hs, dp, eg, a.step, h, a.min_xy).mean())
                      for h in holds]
             print("%-8s %s" % (("%g" % w if w == w else tag),
