@@ -77,21 +77,25 @@ def pareto(pts):
 
 
 def climbed(g, hs, dp, eg, step, hold_s, min_xy):
-    """Ended a step higher than it started, having actually gone somewhere.
+    """Got a step up and STAYED up, while actually going somewhere.
 
-    end_gain_m is the gain on the last live step, so a momentary spike cannot
-    satisfy it and no arbitrary hold window is needed. Measured 2026-09-08 on
-    two independent 10-episode runs, end_gain_m equalled max_gain_m on every
-    episode that climbed: this robot climbs and stays up. The 0.5 s hold in
-    eval_climb's `cleared` column called that 30-40% where ending a step up
-    calls it 70-80%, and the hold was measuring window length, not climbing.
+    Measured 2026-09-08 on 20 episodes with termination reasons: of the eight
+    episodes that ended >= 6 cm up, seven ended in `tilt` or
+    `propeller_collision`. end_gain_m at a tilt termination is the height at
+    the instant the fall fires, because a robot pitching over a step edge has a
+    raised base -- so "ended a step up" counts mid-fall snapshots as climbs.
+    6d2c6b6 used it as the criterion and was wrong.
 
-    Columns missing from CSVs written before 2026-09-08 are skipped rather than
-    excluding every episode. hold_s defaults to 0 (off); raise it only to test
-    sensitivity.
+    hold_s, the longest continuous time above 0.8*step, is what separates a
+    sustained climb from a snapshot: the genuine rows held 0.38-0.76 s while
+    the mid-fall rows held 0.02-0.10 s. It is sensitive -- 25% at 0.25 s
+    against 10% at 0.50 s on that sample -- so the figure prints the sweep and
+    the paper has to state which value it used.
+
+    end_gain_m stays in the CSV as a diagnostic; it is not the criterion.
     """
-    m = (eg >= step) if np.isfinite(eg).any() else (g >= step)
-    if hold_s > 0 and np.isfinite(hs).any():
+    m = g >= step
+    if np.isfinite(hs).any():
         m &= (hs >= hold_s)
     if np.isfinite(dp).any():
         m &= (dp >= min_xy)
@@ -115,7 +119,7 @@ def main():
     p.add_argument("-o", "--out", default="fig_energy.pdf")
     p.add_argument("--step", "--riser", dest="step", type=float, default=0.06,
                    help="step height the staircase was pinned to, m")
-    p.add_argument("--hold_s", type=float, default=0.0,
+    p.add_argument("--hold_s", type=float, default=0.25,
                    help="seconds the height must be held. A bare height "
                         "threshold counts a momentary tip or thrust spike as a "
                         "climb; eval_climb's own 0.5 s is so strict it fired on "
@@ -236,9 +240,8 @@ def main():
                            " ".join("%14s" % c for c in cells)))
 
 
-    print("climb%% = ENDED %.0f cm up, displaced %.2f m%s."
-          % (100 * a.step, a.min_xy,
-             ", held %.2fs" % a.hold_s if a.hold_s > 0 else ""))
+    print("climb%% = reached %.0f cm, HELD %.2f s, displaced %.2f m."
+          % (100 * a.step, a.hold_s, a.min_xy))
     print("peak>h% = bare height threshold, no hold, no displacement. The gap")
     print("between the two columns is tips and thrust spikes.")
     print("\n%-8s %5s %20s %12s %9s %11s" %
