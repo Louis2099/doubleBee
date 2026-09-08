@@ -175,31 +175,48 @@ def _probe_managers(base):
     sys.stdout.flush()
 
 
-def _term_flags(tmgr, names):
-    """name -> per-env bool tensor for this step.
+def _reset_manager(base):
+    """Whatever decides resets, plus the terms a reset can be attributed to.
 
-    get_term() is the public API but is not present on every manager version,
-    so fall back to the private buffer before giving up. Returning {} here is
-    what produced `end=? 100%` on 2026-09-08.
+    This env is a ManagerBasedConstraintRLEnv, so the object is
+    constraint_manager; three earlier attempts looked for termination_manager
+    and produced end="?" on every episode. Terms typed terminate/truncate hold
+    0/1 in _term_values and name the cause; terms typed constraint fire
+    probabilistically into _delta_buf and cannot be attributed.
+    """
+    for attr in ("constraint_manager", "termination_manager"):
+        m = getattr(base, attr, None)
+        if m is None:
+            continue
+        try:
+            names = list(m.active_terms)
+        except Exception as ex:
+            print("[climb] %s.active_terms failed: %r" % (attr, ex))
+            names = []
+        kinds = {}
+        for nm in names:
+            try:
+                kinds[nm] = getattr(m.get_term_cfg(nm), "time_out", None)
+            except Exception:
+                kinds[nm] = None
+        return m, names, kinds
+    return None, [], {}
+
+
+def _fired(mgr, names, kinds):
+    """name -> per-env bool, for the terms that carry a clean 0/1 this step.
+
+    reset() does not clear _term_values, so reading straight after env.step()
+    still describes the step that triggered the reset.
     """
     out = {}
-    buf = getattr(tmgr, "_term_dones", None)
     for nm in names:
-        t = None
+        if kinds.get(nm) not in ("terminate", "truncate"):
+            continue
         try:
-            t = tmgr.get_term(nm)
+            out[nm] = mgr.get_term(nm) >= 0.5
         except Exception:
-            if isinstance(buf, dict):
-                t = buf.get(nm)
-        if t is not None:
-            out[nm] = t
-    if not out:
-        # Cruder, but these two always exist: at least separate a real
-        # termination from running out the 20 s horizon.
-        for nm in ("terminated", "time_outs"):
-            t = getattr(tmgr, nm, None)
-            if t is not None:
-                out[nm] = t
+            pass
     return out
 
 
@@ -297,20 +314,11 @@ def main():
     # fall and a goal arrival are opposite outcomes that look identical in a
     # dones flag. Read the termination manager per step and keep the first term
     # that fired. Wrapped, because a missing manager must not kill the eval.
-    tmgr = getattr(base, "termination_manager", None)
-    term_names = []
-    if tmgr is None:
-        print("[climb] NO termination_manager on %s; managers: %s"
-              % (type(base).__name__,
-                 [x for x in dir(base) if x.endswith("_manager")]))
-    else:
-        try:
-            term_names = list(tmgr.active_terms)
-        except Exception as ex:
-            print("[climb] active_terms failed: %r" % (ex,))
-        print("[climb] termination manager %s, terms: %s"
-              % (type(tmgr).__name__, ", ".join(term_names) or "none"))
-
+    mgr, term_names, term_kinds = _reset_manager(base)
+    print("[climb] reset manager: %s | attributable terms: %s"
+          % (type(mgr).__name__ if mgr is not None else "NONE",
+             ", ".join("%s(%s)" % (n, term_kinds[n]) for n in term_names) or "none"),
+          flush=True)
 
     robot = base.scene["robot"]
     spawn = robot.data.root_pos_w.clone()
@@ -370,8 +378,8 @@ def main():
             max_run = torch.where(alive, torch.maximum(max_run, run), max_run)
             cleared |= alive & (run >= hold_steps) & (disp >= a.min_xy)
 
-            if tmgr is not None:
-                for nm, f in _term_flags(tmgr, term_names).items():
+            if mgr is not None:
+                for nm, f in _fired(mgr, term_names, term_kinds).items():
                     for k in f.nonzero(as_tuple=False).flatten().tolist():
                         if why[k] == "?":
                             why[k] = nm
@@ -385,7 +393,7 @@ def main():
                     "hold_s": round(float(max_run[k].item()) * base.step_dt, 3),
                     "max_disp_m": round(float(max_disp[k].item()), 3),
                     "end_gain_m": round(float(last_gain[k].item()), 4),
-                    "end": why[k],
+                    "end": why[k] if why[k] != "?" else "constraint_prob",
                 })
                 # reset this env's bookkeeping; it has already been respawned
                 spawn[k] = pos[k]
