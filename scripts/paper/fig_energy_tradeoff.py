@@ -202,9 +202,14 @@ def main():
     ax[0].set_xlim(-0.5 - dx, CAP + 0.5 + dx)
     ax[0].set_xlabel("peak height reached (%.0f cm bins)" % (100 * a.step))
     ax[0].set_ylabel("energy per episode (J)")
-    ax[0].set_title("(a)", fontsize=9, loc="left")
-    ax[0].legend(handles=handles, fontsize=7, loc="upper left",
-                 framealpha=0.9, ncol=2)
+    # The 2-column box in the upper left sat on top of the wE=0 column. Open a
+    # band above the data and lay the entries out in one row instead, so the
+    # legend covers no episodes.
+    y0, y1 = ax[0].get_ylim()
+    ax[0].set_ylim(y0, y1 + 0.17 * (y1 - y0))
+    ax[0].legend(handles=handles, fontsize=7, loc="upper center",
+                 framealpha=0.0, ncol=len(handles), handletextpad=0.3,
+                 columnspacing=1.1, borderpad=0.2)
     ax[0].grid(alpha=0.25, axis="y")
 
     # ---- (b) the trade-off, which is (a) aggregated ------------------------
@@ -260,11 +265,11 @@ def main():
         ax[1].set_xlabel("energy per episode reaching %.0f cm (J)" % (100 * a.step))
         ax[1].set_ylabel("episodes reaching %.0f cm (%%)" % (100 * a.step))
         ax[1].legend(fontsize=7, loc="lower right")
-    ax[1].set_title("(b)", fontsize=9, loc="left")
     ax[1].grid(alpha=0.25)
 
-    fig.suptitle("Energy Weight Ablation", fontsize=11, fontweight="bold")
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    fig.suptitle("Energy Weight Ablation", fontsize=11, fontweight="bold",
+                 y=0.965)
     fig.savefig(a.out, bbox_inches="tight")
     fig.savefig(os.path.splitext(a.out)[0] + ".png", dpi=200, bbox_inches="tight")
     print("wrote %s (and .png)" % a.out)
