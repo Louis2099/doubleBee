@@ -42,6 +42,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
 CAP = 3          # steps beyond this are pooled into the "3+" column
+SHOW_MAX = 150   # scatter points drawn per cell; stats use all episodes
 
 
 def load(pattern):
@@ -180,8 +181,14 @@ def main():
             m = r == k
             if not m.any():
                 continue
-            x = k + offs[i] + rng.uniform(-0.30 * dx, 0.30 * dx, m.sum())
-            ax[0].scatter(x, e[m], s=7, alpha=0.22, color=c, linewidths=0,
+            # 2000 episodes per arm draws as a solid blob. Subsample the CLOUD
+            # only -- the mean and sd below still use every episode -- so the
+            # panel shows spread instead of a smear.
+            ei = e[m]
+            if ei.size > SHOW_MAX:
+                ei = rng.choice(ei, SHOW_MAX, replace=False)
+            x = k + offs[i] + rng.uniform(-0.30 * dx, 0.30 * dx, ei.size)
+            ax[0].scatter(x, ei, s=6, alpha=0.18, color=c, linewidths=0,
                           zorder=2)
             if m.sum() >= a.min_n:
                 ax[0].errorbar(k + offs[i], e[m].mean(), yerr=e[m].std(),
@@ -195,8 +202,7 @@ def main():
     ax[0].set_xlim(-0.5 - dx, CAP + 0.5 + dx)
     ax[0].set_xlabel("peak height reached (%.0f cm bins)" % (100 * a.step))
     ax[0].set_ylabel("energy per episode (J)")
-    ax[0].set_title("(a) energy per episode, by height reached",
-                    fontsize=9, loc="left")
+    ax[0].set_title("(a)", fontsize=9, loc="left")
     ax[0].legend(handles=handles, fontsize=7, loc="upper left",
                  framealpha=0.9, ncol=2)
     ax[0].grid(alpha=0.25, axis="y")
@@ -227,9 +233,14 @@ def main():
         front = pareto(pts)
         ax[1].plot([pts[i][0] for i in front], [pts[i][1] for i in front],
                    "-", color="0.55", lw=1.2, zorder=1, label="Pareto front")
+        # Bars are +-1 sd across CHECKPOINTS. They stay because without them
+        # five bare dots imply a ranking the data does not support -- wE=0, 2
+        # and 4 overlap almost entirely. Drawn thin, translucent and behind the
+        # markers so they inform without dominating.
         for (c_, r_), (ce, re_), col in zip(pts, errs, cols):
             ax[1].errorbar([c_], [r_], xerr=[ce], yerr=[re_], fmt="none",
-                           ecolor=col, elinewidth=1.3, capsize=3, zorder=2)
+                           ecolor=col, elinewidth=0.9, capsize=2, alpha=0.55,
+                           zorder=1)
             ax[1].scatter([c_], [r_], s=95, color=col, zorder=3,
                           edgecolors="white", linewidths=1.2)
 
@@ -246,33 +257,14 @@ def main():
         ax[1].set_ylim(min(ys) - ypad, max(ys) + ypad)
         xmid = 0.5 * sum(ax[1].get_xlim())
         ymid = 0.5 * sum(ax[1].get_ylim())
-        # Pooling puts four of five arms in one cluster, so a left/right
-        # flip is not enough -- on 2026-09-08 wE=0/2/4/6 labels overlapped
-        # each other. Push each label radially away from the cluster centroid,
-        # which separates them without any hand-placed offsets.
-        xlo, xhi = ax[1].get_xlim()
-        ylo, yhi = ax[1].get_ylim()
-        fxy = [((q[0] - xlo) / (xhi - xlo), (q[1] - ylo) / (yhi - ylo))
-               for q in pts]
-        fcx = sum(q[0] for q in fxy) / len(fxy)
-        fcy = sum(q[1] for q in fxy) / len(fxy)
-        for (c_, r_), (fx, fy), lab in zip(pts, fxy, labs):
-            ux, uy = fx - fcx, fy - fcy
-            nrm = max(1e-6, (ux * ux + uy * uy) ** 0.5)
-            ux, uy = ux / nrm, uy / nrm
-            ha = "left" if ux > 0.25 else ("right" if ux < -0.25 else "center")
-            va = "bottom" if uy > 0.25 else ("top" if uy < -0.25 else "center")
-            ax[1].annotate("$w_E$=%s" % lab, xy=(c_, r_),
-                           xytext=(16 * ux, 14 * uy),
-                           textcoords="offset points", fontsize=8,
-                           ha=ha, va=va)
         ax[1].set_xlabel("energy per episode reaching %.0f cm (J)" % (100 * a.step))
         ax[1].set_ylabel("episodes reaching %.0f cm (%%)" % (100 * a.step))
         ax[1].legend(fontsize=7, loc="lower right")
-    ax[1].set_title("(b) reliability against cost", fontsize=9, loc="left")
+    ax[1].set_title("(b)", fontsize=9, loc="left")
     ax[1].grid(alpha=0.25)
 
-    fig.tight_layout()
+    fig.suptitle("Energy Weight Ablation", fontsize=11, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
     fig.savefig(a.out, bbox_inches="tight")
     fig.savefig(os.path.splitext(a.out)[0] + ".png", dpi=200, bbox_inches="tight")
     print("wrote %s (and .png)" % a.out)
