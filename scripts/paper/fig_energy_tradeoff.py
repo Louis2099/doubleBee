@@ -45,7 +45,7 @@ CAP = 3          # steps beyond this are pooled into the "3+" column
 
 
 def load(pattern):
-    """[(tag, weight, gain[], energy[], cleared[], hold_s[], disp[])]."""
+    """[(tag, weight, gain[], energy[], cleared[], hold_s[], disp[], end_gain[])]."""
     out = []
     for path in sorted(glob.glob(pattern)):
         recs = list(csv.DictReader(open(path)))
@@ -59,7 +59,8 @@ def load(pattern):
                     np.array([float(r["energy_J"]) for r in recs]),
                     np.array([int(float(r.get("cleared", 0))) for r in recs], bool),
                     np.array([float(r.get("hold_s", "nan")) for r in recs]),
-                    np.array([float(r.get("max_disp_m", "nan")) for r in recs])))
+                    np.array([float(r.get("max_disp_m", "nan")) for r in recs]),
+                    np.array([float(r.get("end_gain_m", "nan")) for r in recs])))
     if not out:
         sys.exit("no CSVs matched %r" % pattern)
     return sorted(out, key=lambda z: (np.isnan(z[1]), z[1]))
@@ -75,15 +76,22 @@ def pareto(pts):
     return sorted(keep, key=lambda i: pts[i][0])
 
 
-def climbed(g, hs, dp, step, hold_s, min_xy):
-    """Height reached, HELD, while actually going somewhere.
+def climbed(g, hs, dp, eg, step, hold_s, min_xy):
+    """Ended a step higher than it started, having actually gone somewhere.
 
-    hold_s and max_disp_m are NaN for CSVs written before 2026-09-08; those
-    degrade to the bare height threshold rather than silently excluding
-    everything.
+    end_gain_m is the gain on the last live step, so a momentary spike cannot
+    satisfy it and no arbitrary hold window is needed. Measured 2026-09-08 on
+    two independent 10-episode runs, end_gain_m equalled max_gain_m on every
+    episode that climbed: this robot climbs and stays up. The 0.5 s hold in
+    eval_climb's `cleared` column called that 30-40% where ending a step up
+    calls it 70-80%, and the hold was measuring window length, not climbing.
+
+    Columns missing from CSVs written before 2026-09-08 are skipped rather than
+    excluding every episode. hold_s defaults to 0 (off); raise it only to test
+    sensitivity.
     """
-    m = g >= step
-    if np.isfinite(hs).any():
+    m = (eg >= step) if np.isfinite(eg).any() else (g >= step)
+    if hold_s > 0 and np.isfinite(hs).any():
         m &= (hs >= hold_s)
     if np.isfinite(dp).any():
         m &= (dp >= min_xy)
@@ -107,7 +115,7 @@ def main():
     p.add_argument("-o", "--out", default="fig_energy.pdf")
     p.add_argument("--step", "--riser", dest="step", type=float, default=0.06,
                    help="step height the staircase was pinned to, m")
-    p.add_argument("--hold_s", type=float, default=0.25,
+    p.add_argument("--hold_s", type=float, default=0.0,
                    help="seconds the height must be held. A bare height "
                         "threshold counts a momentary tip or thrust spike as a "
                         "climb; eval_climb's own 0.5 s is so strict it fired on "
@@ -132,7 +140,7 @@ def main():
     offs = (np.arange(n) - (n - 1) / 2.0) * dx
     handles = []
 
-    for i, ((tag, w, g, e, cl, hs, dp), c) in enumerate(zip(arms, cmap)):
+    for i, ((tag, w, g, e, cl, hs, dp, eg), c) in enumerate(zip(arms, cmap)):
         r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
         lab = "$w_E$=%g" % w if w == w else tag
         # The legend swatch is drawn separately at full opacity. Inheriting the
@@ -166,8 +174,8 @@ def main():
 
     # ---- (b) the trade-off, which is (a) aggregated ------------------------
     pts, labs, cols = [], [], []
-    for (tag, w, g, e, cl, hs, dp), c in zip(arms, cmap):
-        m = climbed(g, hs, dp, a.step, a.hold_s, a.min_xy)
+    for (tag, w, g, e, cl, hs, dp, eg), c in zip(arms, cmap):
+        m = climbed(g, hs, dp, eg, a.step, a.hold_s, a.min_xy)
         if m.sum() < 3:
             print("  %s: only %d episodes climbed, omitted from (b)" % (tag, m.sum()))
             continue
@@ -217,7 +225,7 @@ def main():
     head = ["%d" % k for k in range(CAP)] + ["%d+" % CAP]
     print("\nmean energy per episode (J), by steps climbed   [n in brackets]")
     print("%-8s %s" % ("wE", " ".join("%14s" % h for h in head)))
-    for tag, w, g, e, cl, hs, dp in arms:
+    for tag, w, g, e, cl, hs, dp, eg in arms:
         r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
         cells = []
         for k in range(CAP + 1):
@@ -228,14 +236,15 @@ def main():
                            " ".join("%14s" % c for c in cells)))
 
 
-    print("climb%% = reached %.0f cm, held %.2f s, displaced %.2f m."
-          % (100 * a.step, a.hold_s, a.min_xy))
+    print("climb%% = ENDED %.0f cm up, displaced %.2f m%s."
+          % (100 * a.step, a.min_xy,
+             ", held %.2fs" % a.hold_s if a.hold_s > 0 else ""))
     print("peak>h% = bare height threshold, no hold, no displacement. The gap")
     print("between the two columns is tips and thrust spikes.")
     print("\n%-8s %5s %20s %12s %9s %11s" %
           ("wE", "n", "climb% [95% Wilson]", "E/step(J)", "peak>h%", "steps_med"))
-    for tag, w, g, e, cl, hs, dp in arms:
-        m = climbed(g, hs, dp, a.step, a.hold_s, a.min_xy)
+    for tag, w, g, e, cl, hs, dp, eg in arms:
+        m = climbed(g, hs, dp, eg, a.step, a.hold_s, a.min_xy)
         ok = m.sum() >= 3
         lo, hi = wilson(int(m.sum()), len(g))
         r = np.floor(g / a.step + 1e-9)
@@ -251,8 +260,8 @@ def main():
         holds = [0.0, 0.10, 0.25, 0.50]
         print("\nsensitivity: climb%% vs required hold, at disp >= %.2f m" % a.min_xy)
         print("%-8s %s" % ("wE", " ".join("%9s" % ("%.2fs" % h) for h in holds)))
-        for tag, w, g, e, cl, hs, dp in arms:
-            cells = ["%8.0f%%" % (100 * climbed(g, hs, dp, a.step, h, a.min_xy).mean())
+        for tag, w, g, e, cl, hs, dp, eg in arms:
+            cells = ["%8.0f%%" % (100 * climbed(g, hs, dp, eg, a.step, h, a.min_xy).mean())
                      for h in holds]
             print("%-8s %s" % (("%g" % w if w == w else tag),
                                " ".join("%9s" % c for c in cells)))
