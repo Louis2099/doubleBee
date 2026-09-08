@@ -240,30 +240,32 @@ def main():
              [q[0] - s_ for q, (s_, _) in zip(pts, errs)]
         ys = [q[1] + s_ for q, (_, s_) in zip(pts, errs)] + \
              [q[1] - s_ for q, (_, s_) in zip(pts, errs)]
-        xpad = 0.16 * (max(xs) - min(xs) or 1.0)
-        ypad = 0.16 * (max(ys) - min(ys) or 1.0)
+        xpad = 0.24 * (max(xs) - min(xs) or 1.0)
+        ypad = 0.24 * (max(ys) - min(ys) or 1.0)
         ax[1].set_xlim(min(xs) - xpad, max(xs) + xpad)
         ax[1].set_ylim(min(ys) - ypad, max(ys) + ypad)
         xmid = 0.5 * sum(ax[1].get_xlim())
         ymid = 0.5 * sum(ax[1].get_ylim())
-        # Two arms with near-identical (cost, rate) collide -- wE=0 at
-        # (783, 42%) and wE=2 at (805, 44%) overlapped on 2026-09-08. Flip the
-        # vertical side for a label whose point is close to one already placed.
+        # Pooling puts four of five arms in one cluster, so a left/right
+        # flip is not enough -- on 2026-09-08 wE=0/2/4/6 labels overlapped
+        # each other. Push each label radially away from the cluster centroid,
+        # which separates them without any hand-placed offsets.
         xlo, xhi = ax[1].get_xlim()
         ylo, yhi = ax[1].get_ylim()
-        placed = []
-        for (c_, r_), lab in zip(pts, labs):
-            fx = (c_ - xlo) / (xhi - xlo)
-            fy = (r_ - ylo) / (yhi - ylo)
-            ox, ha = (-8, "right") if c_ > xmid else (8, "left")
-            up = r_ <= ymid
-            if any((fx - px) ** 2 + (fy - py) ** 2 < 0.11 ** 2 for px, py in placed):
-                up = not up
-            oy, va = (5, "bottom") if up else (-3, "top")
-            ax[1].annotate("$w_E$=%s" % lab, xy=(c_, r_), xytext=(ox, oy),
+        fxy = [((q[0] - xlo) / (xhi - xlo), (q[1] - ylo) / (yhi - ylo))
+               for q in pts]
+        fcx = sum(q[0] for q in fxy) / len(fxy)
+        fcy = sum(q[1] for q in fxy) / len(fxy)
+        for (c_, r_), (fx, fy), lab in zip(pts, fxy, labs):
+            ux, uy = fx - fcx, fy - fcy
+            nrm = max(1e-6, (ux * ux + uy * uy) ** 0.5)
+            ux, uy = ux / nrm, uy / nrm
+            ha = "left" if ux > 0.25 else ("right" if ux < -0.25 else "center")
+            va = "bottom" if uy > 0.25 else ("top" if uy < -0.25 else "center")
+            ax[1].annotate("$w_E$=%s" % lab, xy=(c_, r_),
+                           xytext=(16 * ux, 14 * uy),
                            textcoords="offset points", fontsize=8,
                            ha=ha, va=va)
-            placed.append((fx, fy))
         ax[1].set_xlabel("energy per episode reaching %.0f cm (J)" % (100 * a.step))
         ax[1].set_ylabel("episodes reaching %.0f cm (%%)" % (100 * a.step))
         ax[1].legend(fontsize=7, loc="lower right")

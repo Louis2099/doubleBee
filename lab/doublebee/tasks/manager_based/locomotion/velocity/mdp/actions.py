@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+import os
 import torch
 import isaaclab.envs.mdp as mdp
 from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction, JointVelocityAction
@@ -873,7 +874,13 @@ class ActionsCfg4DConstantThrust(ActionsCfg4D):
         scale=1.0,
         tied_scale={"leftPropeller": 320.0, "rightPropeller": -320.0},
         tied_offset={"leftPropeller": 320.0, "rightPropeller": -320.0},
-        hold_action=1.0,          # 17.3 N total, T/W 0.55 -- BB_HOV_DC
+        # A SINGLE fixed thrust value is attackable as a strawman -- "you picked
+        # a bad constant". Sweeping it gives a fixed-allocation FRONTIER to plot
+        # the learned Pareto front against, which is what IROS R1 was asking for
+        # ("how much better than a well-designed mode-switching controller?").
+        # Default 1.0 = 17.3 N total, T/W 0.55, the published decoupled
+        # controller's BB_HOV_DC = 1335 us. Unchanged unless the env var is set.
+        hold_action=float(os.environ.get("DOUBLEBEE_HOLD_ACTION", 1.0)),
         use_default_offset=False,
         preserve_order=True,
     )
