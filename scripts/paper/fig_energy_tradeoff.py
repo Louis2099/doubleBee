@@ -45,7 +45,7 @@ CAP = 3          # steps beyond this are pooled into the "3+" column
 
 
 def load(pattern):
-    """[(tag, weight, gain[], energy[], cleared[])], ordered by weight."""
+    """[(tag, weight, gain[], energy[], cleared[], hold_s[], disp[])]."""
     out = []
     for path in sorted(glob.glob(pattern)):
         recs = list(csv.DictReader(open(path)))
@@ -57,7 +57,9 @@ def load(pattern):
         out.append((tag, w,
                     np.array([float(r["max_gain_m"]) for r in recs]),
                     np.array([float(r["energy_J"]) for r in recs]),
-                    np.array([int(float(r.get("cleared", 0))) for r in recs], bool)))
+                    np.array([int(float(r.get("cleared", 0))) for r in recs], bool),
+                    np.array([float(r.get("hold_s", "nan")) for r in recs]),
+                    np.array([float(r.get("max_disp_m", "nan")) for r in recs])))
     if not out:
         sys.exit("no CSVs matched %r" % pattern)
     return sorted(out, key=lambda z: (np.isnan(z[1]), z[1]))
@@ -71,6 +73,21 @@ def pareto(pts):
                    for j, (c2, b2) in enumerate(pts) if j != i):
             keep.append(i)
     return sorted(keep, key=lambda i: pts[i][0])
+
+
+def climbed(g, hs, dp, step, hold_s, min_xy):
+    """Height reached, HELD, while actually going somewhere.
+
+    hold_s and max_disp_m are NaN for CSVs written before 2026-09-08; those
+    degrade to the bare height threshold rather than silently excluding
+    everything.
+    """
+    m = g >= step
+    if np.isfinite(hs).any():
+        m &= (hs >= hold_s)
+    if np.isfinite(dp).any():
+        m &= (dp >= min_xy)
+    return m
 
 
 def wilson(k, n, z=1.96):
@@ -90,11 +107,14 @@ def main():
     p.add_argument("-o", "--out", default="fig_energy.pdf")
     p.add_argument("--step", "--riser", dest="step", type=float, default=0.06,
                    help="step height the staircase was pinned to, m")
-    p.add_argument("--rate", choices=("cleared", "gain"), default="cleared",
-                   help="'cleared' = eval_climb's own column: height held for "
-                        "--hold seconds while covering --min-xy metres. 'gain' = "
-                        "a bare max_gain_m threshold, which counts a momentary "
-                        "thrust-driven altitude peak as a climb. Use 'cleared'.")
+    p.add_argument("--hold_s", type=float, default=0.25,
+                   help="seconds the height must be held. A bare height "
+                        "threshold counts a momentary tip or thrust spike as a "
+                        "climb; eval_climb's own 0.5 s is so strict it fired on "
+                        "0.5%% of episodes. Sweep it -- the table prints the "
+                        "sensitivity -- and state what you used.")
+    p.add_argument("--min_xy", type=float, default=0.35,
+                   help="metres from spawn, so hovering in place is not a climb")
     p.add_argument("--min_n", type=int, default=5,
                    help="cells with fewer episodes than this get no mean marker")
     a = p.parse_args()
@@ -112,7 +132,7 @@ def main():
     offs = (np.arange(n) - (n - 1) / 2.0) * dx
     handles = []
 
-    for i, ((tag, w, g, e, cl), c) in enumerate(zip(arms, cmap)):
+    for i, ((tag, w, g, e, cl, hs, dp), c) in enumerate(zip(arms, cmap)):
         r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
         lab = "$w_E$=%g" % w if w == w else tag
         # The legend swatch is drawn separately at full opacity. Inheriting the
@@ -146,8 +166,8 @@ def main():
 
     # ---- (b) the trade-off, which is (a) aggregated ------------------------
     pts, labs, cols = [], [], []
-    for (tag, w, g, e, cl), c in zip(arms, cmap):
-        m = cl if a.rate == "cleared" else (g >= a.step)
+    for (tag, w, g, e, cl, hs, dp), c in zip(arms, cmap):
+        m = climbed(g, hs, dp, a.step, a.hold_s, a.min_xy)
         if m.sum() < 3:
             print("  %s: only %d episodes climbed, omitted from (b)" % (tag, m.sum()))
             continue
@@ -183,8 +203,7 @@ def main():
                            textcoords="offset points", fontsize=8,
                            ha=ha, va=va)
         ax[1].set_xlabel("energy per step climbed (J)")
-        ax[1].set_ylabel("episodes climbing a step (%)" if a.rate == "cleared"
-                         else "episodes exceeding %.0f cm (%%)" % (100 * a.step))
+        ax[1].set_ylabel("episodes climbing a step (%)")
         ax[1].legend(fontsize=7, loc="lower right")
     ax[1].set_title("(b) reliability against cost", fontsize=9, loc="left")
     ax[1].grid(alpha=0.25)
@@ -198,7 +217,7 @@ def main():
     head = ["%d" % k for k in range(CAP)] + ["%d+" % CAP]
     print("\nmean energy per episode (J), by steps climbed   [n in brackets]")
     print("%-8s %s" % ("wE", " ".join("%14s" % h for h in head)))
-    for tag, w, g, e, cl in arms:
+    for tag, w, g, e, cl, hs, dp in arms:
         r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
         cells = []
         for k in range(CAP + 1):
@@ -209,13 +228,14 @@ def main():
                            " ".join("%14s" % c for c in cells)))
 
 
-    print("climb%% = held %s. peak>h%% = bare max_gain threshold, no hold, no\n"
-          "  displacement -- the gap between the two columns is thrust spikes."
-          % "0.5 s over 0.35 m (eval_climb's cleared column)")
+    print("climb%% = reached %.0f cm, held %.2f s, displaced %.2f m."
+          % (100 * a.step, a.hold_s, a.min_xy))
+    print("peak>h% = bare height threshold, no hold, no displacement. The gap")
+    print("between the two columns is tips and thrust spikes.")
     print("\n%-8s %5s %20s %12s %9s %11s" %
           ("wE", "n", "climb% [95% Wilson]", "E/step(J)", "peak>h%", "steps_med"))
-    for tag, w, g, e, cl in arms:
-        m = cl if a.rate == "cleared" else (g >= a.step)
+    for tag, w, g, e, cl, hs, dp in arms:
+        m = climbed(g, hs, dp, a.step, a.hold_s, a.min_xy)
         ok = m.sum() >= 3
         lo, hi = wilson(int(m.sum()), len(g))
         r = np.floor(g / a.step + 1e-9)
@@ -223,6 +243,19 @@ def main():
               % (("%g" % w if w == w else tag), len(g), 100 * m.mean(), lo, hi,
                  "%.0f" % e[m].mean() if ok else "-",
                  100 * (g >= a.step).mean(), np.median(r)))
+
+
+    # How much of the answer is the hold threshold? If the ranking flips across
+    # this row the criterion is carrying the result and the paper has to say so.
+    if any(np.isfinite(z[5]).any() for z in arms):
+        holds = [0.0, 0.10, 0.25, 0.50]
+        print("\nsensitivity: climb%% vs required hold, at disp >= %.2f m" % a.min_xy)
+        print("%-8s %s" % ("wE", " ".join("%9s" % ("%.2fs" % h) for h in holds)))
+        for tag, w, g, e, cl, hs, dp in arms:
+            cells = ["%8.0f%%" % (100 * climbed(g, hs, dp, a.step, h, a.min_xy).mean())
+                     for h in holds]
+            print("%-8s %s" % (("%g" % w if w == w else tag),
+                               " ".join("%9s" % c for c in cells)))
 
 
 if __name__ == "__main__":
