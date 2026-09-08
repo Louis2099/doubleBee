@@ -149,10 +149,14 @@ def main():
                         "sensitivity -- and state what you used.")
     p.add_argument("--min_xy", type=float, default=0.0,
                    help="metres from spawn, so hovering in place is not a climb")
-    p.add_argument("--layout", choices=("column", "wide"), default="column",
+    p.add_argument("--layout", choices=("column", "wide", "sbs"), default="column",
                    help="'column' renders 3.4in stacked for a single IEEE "
                         "column, so fonts are not scaled down at include time. "
-                        "'wide' is the 9.6in two-panel version for figure*.")
+                        "'wide' is the 9.6in two-panel version for figure*. "
+                        "'sbs' keeps the panels side by side at 3.4in: the "
+                        "episode cloud is dropped and the sparse top bin "
+                        "pooled, because 5 arms x 4 bins of scatter in 1.6in "
+                        "is a smear.")
     p.add_argument("--min_n", type=int, default=5,
                    help="cells with fewer episodes than this get no mean marker")
     a = p.parse_args()
@@ -169,7 +173,12 @@ def main():
     # A 9.6in figure dropped into a 3.5in column scales to ~36%, taking the
     # 7pt legend to about 2.5pt. Render at the width it will be printed at
     # instead, stacked, and shrink the marks rather than the type.
-    if a.layout == "column":
+    if a.layout == "sbs":
+        fig, ax = plt.subplots(1, 2, figsize=(3.45, 2.05),
+                               gridspec_kw=dict(width_ratios=[1.55, 1.0]))
+        st = dict(pt=2.0, ptalpha=0.0, ms=3.2, elw=0.8, cap=1.4, big=26,
+                  fs=6.5, tick=6.0, leg=6.0, title=7.0, show=0, ncol=5)
+    elif a.layout == "column":
         fig, ax = plt.subplots(2, 1, figsize=(3.4, 4.7),
                                gridspec_kw=dict(height_ratios=[1.35, 1.0]))
         st = dict(pt=3.0, ptalpha=0.30, ms=4.0, elw=1.0, cap=1.8, big=42,
@@ -181,6 +190,7 @@ def main():
                   fs=9.0, tick=8.5, leg=7.0, title=9.0, show=SHOW_MAX, ncol=5)
     for a_ in ax:
         a_.tick_params(labelsize=st["tick"])
+    cap = 2 if a.layout == "sbs" else CAP
 
     # ---- (a) every episode, columns of equal work --------------------------
     dx = 0.78 / n
@@ -189,12 +199,12 @@ def main():
 
     for i, ((w, lab, files), c) in enumerate(zip(groups, cmap)):
         g, e, cl, hs, dp, eg, en = pooled(files)
-        r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
+        r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), cap)
         # The legend swatch is drawn separately at full opacity. Inheriting the
         # scatter's alpha=0.22 made the legend unreadable at print size.
         handles.append(Line2D([0], [0], marker="o", ls="none", ms=st["ms"],
                               color=c, mec="0.15", mew=0.7, label=lab))
-        for k in range(CAP + 1):
+        for k in range(cap + 1):
             m = r == k
             if not m.any():
                 continue
@@ -202,33 +212,45 @@ def main():
             # only -- the mean and sd below still use every episode -- so the
             # panel shows spread instead of a smear.
             ei = e[m]
-            if ei.size > st["show"]:
+            if st["show"] == 0:
+                ei = ei[:0]
+            elif ei.size > st["show"]:
                 ei = rng.choice(ei, st["show"], replace=False)
-            x = k + offs[i] + rng.uniform(-0.30 * dx, 0.30 * dx, ei.size)
-            ax[0].scatter(x, ei, s=st["pt"], alpha=st["ptalpha"], color=c,
-                          linewidths=0, zorder=2)
+            if ei.size:
+                x = k + offs[i] + rng.uniform(-0.30 * dx, 0.30 * dx, ei.size)
+                ax[0].scatter(x, ei, s=st["pt"], alpha=st["ptalpha"], color=c,
+                              linewidths=0, zorder=2)
             if m.sum() >= a.min_n:
                 ax[0].errorbar(k + offs[i], e[m].mean(), yerr=e[m].std(),
                                fmt="o", ms=st["ms"], color=c, ecolor=c,
                                elinewidth=st["elw"], capsize=st["cap"],
                                mec="0.15", mew=0.7, zorder=4)
-    for k in range(CAP):
+    for k in range(cap):
         ax[0].axvline(k + 0.5, color="0.85", lw=0.8, zorder=0)
-    ax[0].set_xticks(range(CAP + 1))
-    ax[0].set_xticklabels([str(k) for k in range(CAP)] + ["%d+" % CAP])
-    ax[0].set_xlim(-0.5 - dx, CAP + 0.5 + dx)
-    ax[0].set_xlabel("peak height reached (%.0f cm bins)" % (100 * a.step), fontsize=st["fs"])
+    ax[0].set_xticks(range(cap + 1))
+    ax[0].set_xticklabels([str(k) for k in range(cap)] + ["%d+" % cap])
+    ax[0].set_xlim(-0.5 - dx, cap + 0.5 + dx)
+    _xl0 = ("peak height (%.0f cm bins)" if a.layout == "sbs"
+            else "peak height reached (%.0f cm bins)")
+    ax[0].set_xlabel(_xl0 % (100 * a.step), fontsize=st["fs"])
     ax[0].set_ylabel("energy per episode (J)", fontsize=st["fs"])
-    ax[0].set_title("Energy per episode, by height reached",
-                    fontsize=st["title"], loc="left")
+    if a.layout != "sbs":
+        ax[0].set_title("Energy per episode, by height reached",
+                        fontsize=st["title"], loc="left")
     # The 2-column box in the upper left sat on top of the wE=0 column. Open a
     # band above the data and lay the entries out in one row instead, so the
     # legend covers no episodes.
     y0, y1 = ax[0].get_ylim()
-    ax[0].set_ylim(y0, y1 + (0.30 if a.layout == "column" else 0.17) * (y1 - y0))
-    ax[0].legend(handles=handles, fontsize=st["leg"], loc="upper center",
-                 framealpha=0.0, ncol=st["ncol"], handletextpad=0.25,
-                 columnspacing=0.9, borderpad=0.15, labelspacing=0.25)
+    if a.layout != "sbs":
+        ax[0].set_ylim(y0, y1 + (0.30 if a.layout == "column" else 0.17) * (y1 - y0))
+    if a.layout == "sbs":
+        fig.legend(handles=handles, fontsize=st["leg"], loc="lower center",
+                   ncol=5, frameon=False, handletextpad=0.2,
+                   columnspacing=0.7, bbox_to_anchor=(0.5, 0.0))
+    else:
+        ax[0].legend(handles=handles, fontsize=st["leg"], loc="upper center",
+                     framealpha=0.0, ncol=st["ncol"], handletextpad=0.25,
+                     columnspacing=0.9, borderpad=0.15, labelspacing=0.25)
     ax[0].grid(alpha=0.25, axis="y")
 
     # ---- (b) the trade-off, which is (a) aggregated ------------------------
@@ -281,13 +303,20 @@ def main():
         ax[1].set_ylim(min(ys) - ypad, max(ys) + ypad)
         xmid = 0.5 * sum(ax[1].get_xlim())
         ymid = 0.5 * sum(ax[1].get_ylim())
-        ax[1].set_xlabel("energy per episode reaching %.0f cm (J)" % (100 * a.step), fontsize=st["fs"])
-        ax[1].set_ylabel("episodes reaching %.0f cm (%%)" % (100 * a.step), fontsize=st["fs"])
-        ax[1].legend(fontsize=st["leg"], loc="lower right")
-    ax[1].set_title("Reliability against cost", fontsize=st["title"], loc="left")
+        _xl1 = ("energy at %.0f cm (J)" if a.layout == "sbs"
+                else "energy per episode reaching %.0f cm (J)")
+        ax[1].set_xlabel(_xl1 % (100 * a.step), fontsize=st["fs"])
+        _yl1 = ("reaching %.0f cm (%%)" if a.layout == "sbs"
+                else "episodes reaching %.0f cm (%%)")
+        ax[1].set_ylabel(_yl1 % (100 * a.step), fontsize=st["fs"])
+        if a.layout != "sbs":
+            ax[1].legend(fontsize=st["leg"], loc="lower right")
+    if a.layout != "sbs":
+        ax[1].set_title("Reliability against cost", fontsize=st["title"],
+                        loc="left")
     ax[1].grid(alpha=0.25)
 
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0.09, 1, 1) if a.layout == "sbs" else None)
     fig.savefig(a.out, bbox_inches="tight")
     fig.savefig(os.path.splitext(a.out)[0] + ".png", dpi=200, bbox_inches="tight")
     print("wrote %s (and .png)" % a.out)
@@ -298,7 +327,7 @@ def main():
     print("%-8s %s" % ("wE", " ".join("%14s" % h for h in head)))
     for w, lab, files in groups:
         g, e, cl, hs, dp, eg, en = pooled(files)
-        r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), CAP)
+        r = np.minimum(np.floor(g / a.step + 1e-9).astype(int), cap)
         cells = []
         for k in range(CAP + 1):
             m = r == k
