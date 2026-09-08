@@ -124,6 +124,56 @@ def summarise(pattern):
     return
 
 
+
+def _probe_managers(base):
+    """Dump whatever decides resets, so the API is read rather than guessed.
+
+    This env is a ManagerBasedConstraintRLEnv: it has a ConstraintManager, not
+    the TerminationManager the first two attempts assumed, which is why every
+    episode was labelled "?" on 2026-09-08.
+    """
+    print("\n===== MANAGER PROBE =====")
+    print("env class: %s" % type(base).__name__)
+    names = [x for x in dir(base) if "manager" in x.lower() and not x.startswith("__")]
+    print("manager attributes: %s" % names)
+    for nm in names:
+        try:
+            m = getattr(base, nm)
+        except Exception as ex:
+            print("  %s -> unreadable (%r)" % (nm, ex))
+            continue
+        if m is None or isinstance(m, (str, int, float, bool)):
+            print("  %s = %r" % (nm, m))
+            continue
+        print("  --- %s : %s" % (nm, type(m).__name__))
+        for attr in ("active_terms", "_term_names", "term_names"):
+            if hasattr(m, attr):
+                try:
+                    print("      %s = %s" % (attr, list(getattr(m, attr))))
+                except Exception as ex:
+                    print("      %s unreadable (%r)" % (attr, ex))
+        bufs = [a for a in dir(m)
+                if (a.endswith("_buf") or a in ("dones", "terminated", "time_outs"))
+                and not a.startswith("__")]
+        print("      buffers: %s" % bufs)
+        for a in bufs:
+            try:
+                v = getattr(m, a)
+                print("        %s: shape=%s sum=%s"
+                      % (a, tuple(getattr(v, "shape", ())), float(v.sum())))
+            except Exception:
+                pass
+        for a in ("_term_dones", "_term_values", "_term_cfgs"):
+            if hasattr(m, a):
+                try:
+                    d = getattr(m, a)
+                    print("      %s keys: %s" % (a, list(d) if hasattr(d, "keys")
+                                                 else type(d).__name__))
+                except Exception:
+                    pass
+    print("===== END PROBE =====\n")
+
+
 def _term_flags(tmgr, names):
     """name -> per-env bool tensor for this step.
 
@@ -176,6 +226,8 @@ def main():
     p.add_argument("--frac", type=float, default=0.8,
                    help="fraction of the step height that counts as up")
     p.add_argument("--out", default="climb.csv")
+    p.add_argument("--probe", action="store_true",
+                   help="step briefly, dump which manager decides resets, exit")
     a = p.parse_args()
 
     if a.summarise:
@@ -276,6 +328,14 @@ def main():
     rows = []
 
     obs, _ = env.get_observations()
+    if a.probe:
+        with torch.inference_mode():
+            for _ in range(120):
+                obs, _, _, _ = env.step(policy(obs))
+        _probe_managers(base)
+        app.close()
+        return
+
     while len(rows) < a.episodes:
         with torch.inference_mode():
             obs, _, dones, _ = env.step(policy(obs))
@@ -342,10 +402,17 @@ def main():
     from collections import Counter
     ends = Counter(r["end"] for r in rows)
     max_ep = int(round(base.max_episode_length))
-    print("  episode length: mean %.0f of %d steps (%.1f s of %.1f s horizon)"
-          % (st.mean([r["steps"] for r in rows]), max_ep,
-             st.mean([r["steps"] for r in rows]) * base.step_dt,
-             max_ep * base.step_dt))
+    sl = sorted(r["steps"] for r in rows)
+    # The mean is not enough. On 2026-09-08 mean ep_len was 105 while a single
+    # env was observed running 603 steps, so the distribution is skewed and a
+    # mass of very short resets would dominate every statistic in the CSV.
+    print("  episode length of %d steps (%.1f s): p10 %d  median %d  mean %.0f"
+          "  p90 %d  max %d" % (max_ep, max_ep * base.step_dt,
+                                sl[int(0.10 * len(sl))], sl[len(sl) // 2],
+                                st.mean(sl), sl[int(0.90 * len(sl))], sl[-1]))
+    tiny = sum(1 for x in sl if x < 25)
+    print("  episodes under 25 steps (0.5 s): %d of %d (%.0f%%)"
+          % (tiny, len(sl), 100.0 * tiny / len(sl)))
     print("  how episodes ended: %s"
           % ("  ".join("%s %.0f%%" % (k, 100.0 * v / len(rows))
                        for k, v in ends.most_common())))
