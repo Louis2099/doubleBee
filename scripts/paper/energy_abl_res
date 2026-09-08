@@ -1,0 +1,73 @@
+
+t Z total: 5.18 N | Weight: 31.57 N | Margin: -26.39 N
+  TOTAL THRUST being applied: 5.26 N
+  External forces applied: 6.09 N
+  External forces Z-axis applied: 5.18 N
+[climb] 200/200
+wrote climb_hE8.csv   cleared 0% of 200 episodes  at h=6 cm
+  height gain: mean 0.023  median 0.019  p90 0.053  max 0.115 m
+policy    n      gain_mean median   p90      max      E_mean(J) J/m climbed ep_len
+----------------------------------------------------------------------------------------
+hE0       200    0.063    0.052    0.122    0.176    732       11635      109
+hE2       200    0.082    0.078    0.160    0.204    800       9718       121
+hE4       200    0.066    0.054    0.112    0.145    494       7468       97
+hE6       200    0.078    0.062    0.138    0.183    559       7145       110
+hE8       200    0.023    0.019    0.053    0.115    416       18423      99
+
+SAME DATA, RESTRICTED TO EPISODES THAT CLIMBED
+
+  gain > 0.03 m  (= cleared one riser)
+  policy        n    rate  E/riser(J) gain_mean       J/m
+  hE0         157     78%         757     0.076     10007
+  hE2         173     86%         813     0.092      8883
+  hE4         190     95%         494     0.068      7221
+  hE6         182     91%         569     0.084      6804
+  hE8          54     27%         461     0.056      8187
+
+  gain > 0.06 m  (= cleared one riser)
+  policy        n    rate  E/riser(J) gain_mean       J/m
+  hE0          84     42%         781     0.104      7533
+  hE2         114     57%         856     0.114      7507
+  hE4          85     42%         569     0.090      6311
+  hE6         104     52%         622     0.115      5426
+  hE8          16      8%         479     0.079      6052
+
+  gain > 0.09 m  (= cleared one riser)
+  policy        n    rate  E/riser(J) gain_mean       J/m
+  hE0          54     27%         786     0.120      6578
+  hE2          80     40%         866     0.130      6671
+  hE4          41     20%         620     0.113      5507
+  hE6          81     40%         643     0.126      5116
+  hE8           3      2%         491     0.104      4720
+
+  rate       = fraction of episodes that cleared that height
+  E/riser(J) = mean energy on those episodes -- what one riser costs
+  The pair (rate, E/riser) IS the trade-off. A policy can be cheap and
+  rarely climb, or reliable and expensive; neither column alone decides.
+
+All episodes, identical terrain (the play curriculum, unmodified).
+J/m climbed = total joules / total height gained: the efficiency number,
+with no success threshold to argue about.
+wrote fig_energy.pdf (and .png)
+
+mean energy per episode (J), by risers cleared   [n in brackets]
+wE                    0              1              2             3+
+0              697 [116]       776 [ 62]       795 [ 22]              -
+2              726 [ 86]       835 [ 79]       892 [ 30]       968 [  5]
+4              438 [115]       565 [ 79]       625 [  6]              -
+6              490 [ 96]       590 [ 75]       703 [ 28]       756 [  1]
+8              410 [183]       481 [ 17]              -              -
+
+wE           n   clear%   E/riser(J)  risers_med
+0          200      42%          781           0
+2          200      57%          856           1
+4          200      42%          569           0
+6          200      52%          622           1
+8          200       8%          481           0
+hE0 logs/co_rl/doublebee_velocity/tqc/2026-09-06_23-10-57_hE0/model_5899.pt
+hE2 logs/co_rl/doublebee_velocity/tqc/2026-09-06_23-10-57_hE2/model_5899.pt
+hE4 logs/co_rl/doublebee_velocity/tqc/2026-09-06_23-10-57_hE4/model_5899.pt
+hE6 logs/co_rl/doublebee_velocity/tqc/2026-09-06_23-10-57_hE6/model_5899.pt
+hE8 logs/co_rl/doublebee_velocity/tqc/2026-09-06_23-10-57_hE8/model_5899.pt
+(isaaclab) ubuntu@ishaan-doublebee /data/doubleBee/doubleBee_terr_spawn (ish/hybrid_mode*?) $ 
+
