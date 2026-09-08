@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import torch
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.sensors import ContactSensor
@@ -270,6 +271,9 @@ def propeller_collision(
     
 #     return goal_reached
 
+_GOAL_DZ = float(os.environ.get("DOUBLEBEE_GOAL_DZ", "0.15"))
+
+
 def goal_reached(
     env: ManagerBasedEnv,
     distance_threshold: float = 0.25,
@@ -360,7 +364,17 @@ def goal_reached(
         )
         target_z = command_term.current_targets_w[:, 2] - TARGET_Z_VIS_OFFSET
         height_diff = target_z - robot_z
-        at_height = height_diff.abs() < 0.15
+        # TOLERANCE, not the check, is what makes this vacuous. The play terrain
+        # is two stairs; pinned at 0.06 m the entire climb is 0.12 m, so a 0.15 m
+        # tolerance cannot fail and a robot standing at the FOOT of the staircase
+        # satisfies `at_height`. Measured 2026-09-08: goal_reached fired on
+        # episodes whose total height gain was 0.023 m. Since this gate feeds the
+        # terminal reward, the policy is paid for stopping at the bottom.
+        #
+        # Default unchanged at 0.15 so every existing checkpoint and every number
+        # already measured stays reproducible. Set DOUBLEBEE_GOAL_DZ=0.04 (below
+        # one riser) to require actually arriving at the target's level.
+        at_height = height_diff.abs() < _GOAL_DZ
     else:
         # no target Z available — skip height check
         at_height = torch.ones(env.num_envs, device=env.device, dtype=torch.bool)
