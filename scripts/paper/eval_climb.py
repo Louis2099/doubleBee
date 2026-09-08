@@ -89,9 +89,16 @@ def summarise(pattern):
     # actually shaping. Reporting only one of them misstates the trade-off.
     print("\nSAME DATA, RESTRICTED TO EPISODES THAT CLIMBED")
     for thr in (0.03, 0.06, 0.09):
-        print("\n  gain > %.2f m" % thr)
-        print("  %-9s %5s %9s %9s %9s %7s" %
-              ("policy", "n", "gain_mean", "E_mean", "J/m", "rate"))
+        print("\n  gain > %.2f m  (= cleared one riser)" % thr)
+        # ENERGY PER RISER CLEARED is the headline number, not J/m.
+        #
+        # Every episode faces the same riser, so "joules to get up one step" is
+        # directly interpretable and needs no normalisation argument. J/m divides
+        # by a distance nobody climbs -- a fractional metre -- and it moves when
+        # a policy happens to overshoot in height, which is not efficiency.
+        # Reported alongside so the two can be cross-checked, not instead of.
+        print("  %-9s %5s %7s %11s %9s %9s" %
+              ("policy", "n", "rate", "E/riser(J)", "gain_mean", "J/m"))
         for path in sorted(glob.glob(pattern)):
             recs = list(csv.DictReader(open(path)))
             if not recs:
@@ -103,12 +110,13 @@ def summarise(pattern):
             if m.sum() < 3:
                 print("  %-9s %5d   (too few to average)" % (tag, m.sum()))
                 continue
-            print("  %-9s %5d %9.3f %9.0f %9.0f %6.0f%%"
-                  % (tag, m.sum(), g[m].mean(), e[m].mean(),
-                     e[m].sum() / g[m].sum(), 100.0 * m.mean()))
-    print("\n  rate = fraction of the 200 episodes that reached that height.")
-    print("  A policy can be cheap per metre and still rarely climb; both columns")
-    print("  are the trade-off, and neither alone is the answer.")
+            print("  %-9s %5d %6.0f%% %11.0f %9.3f %9.0f"
+                  % (tag, m.sum(), 100.0 * m.mean(), e[m].mean(),
+                     g[m].mean(), e[m].sum() / g[m].sum()))
+    print("\n  rate       = fraction of episodes that cleared that height")
+    print("  E/riser(J) = mean energy on those episodes -- what one riser costs")
+    print("  The pair (rate, E/riser) IS the trade-off. A policy can be cheap and")
+    print("  rarely climb, or reliable and expensive; neither column alone decides.")
 
     print("\nAll episodes, identical terrain (the play curriculum, unmodified).")
     print("J/m climbed = total joules / total height gained: the efficiency number,")
