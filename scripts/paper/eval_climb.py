@@ -124,6 +124,34 @@ def summarise(pattern):
     return
 
 
+def _term_flags(tmgr, names):
+    """name -> per-env bool tensor for this step.
+
+    get_term() is the public API but is not present on every manager version,
+    so fall back to the private buffer before giving up. Returning {} here is
+    what produced `end=? 100%` on 2026-09-08.
+    """
+    out = {}
+    buf = getattr(tmgr, "_term_dones", None)
+    for nm in names:
+        t = None
+        try:
+            t = tmgr.get_term(nm)
+        except Exception:
+            if isinstance(buf, dict):
+                t = buf.get(nm)
+        if t is not None:
+            out[nm] = t
+    if not out:
+        # Cruder, but these two always exist: at least separate a real
+        # termination from running out the 20 s horizon.
+        for nm in ("terminated", "time_outs"):
+            t = getattr(tmgr, nm, None)
+            if t is not None:
+                out[nm] = t
+    return out
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--summarise")
@@ -217,8 +245,19 @@ def main():
     # dones flag. Read the termination manager per step and keep the first term
     # that fired. Wrapped, because a missing manager must not kill the eval.
     tmgr = getattr(base, "termination_manager", None)
-    term_names = list(getattr(tmgr, "active_terms", []) or [])
-    print("[climb] termination terms: %s" % (", ".join(term_names) or "none"))
+    term_names = []
+    if tmgr is None:
+        print("[climb] NO termination_manager on %s; managers: %s"
+              % (type(base).__name__,
+                 [x for x in dir(base) if x.endswith("_manager")]))
+    else:
+        try:
+            term_names = list(tmgr.active_terms)
+        except Exception as ex:
+            print("[climb] active_terms failed: %r" % (ex,))
+        print("[climb] termination manager %s, terms: %s"
+              % (type(tmgr).__name__, ", ".join(term_names) or "none"))
+
 
     robot = base.scene["robot"]
     spawn = robot.data.root_pos_w.clone()
@@ -257,15 +296,11 @@ def main():
             max_disp = torch.maximum(max_disp, disp)
             cleared |= (run >= hold_steps) & (disp >= a.min_xy)
 
-            if term_names:
-                try:
-                    for nm in term_names:
-                        f = tmgr.get_term(nm)
-                        for k in f.nonzero(as_tuple=False).flatten().tolist():
-                            if why[k] == "?":
-                                why[k] = nm
-                except Exception:
-                    term_names = []
+            if tmgr is not None:
+                for nm, f in _term_flags(tmgr, term_names).items():
+                    for k in f.nonzero(as_tuple=False).flatten().tolist():
+                        if why[k] == "?":
+                            why[k] = nm
 
             for k in (dones > 0.5).nonzero(as_tuple=False).flatten().tolist():
                 rows.append({
