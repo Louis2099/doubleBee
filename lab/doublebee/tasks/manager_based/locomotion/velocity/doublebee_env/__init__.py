@@ -13,6 +13,10 @@ from .flat_env.hybrid_stair.hybrid_stair_cfg import (
     DoubleBeeHybridStairWheelsOnlyCfg,
     DoubleBeeHybridStairWheelsServosCfg,
     DoubleBeeHybridStairPropellerOnlyCfg,
+    DoubleBeeHybridStairConstantThrustCfg_PLAY,
+    DoubleBeeHybridStairWheelsOnlyCfg_PLAY,
+    DoubleBeeHybridStairWheelsServosCfg_PLAY,
+    DoubleBeeHybridStairPropellerOnlyCfg_PLAY,
 )
 from .flat_env.inverted_pendulum import DoubleBeeInvertedPendulumCfg, DoubleBeeInvertedPendulumCfg_PLAY
 from .velocity_env_cfg import DoubleBeeVelocityEnvCfg
@@ -139,3 +143,25 @@ gym.register(
 )
 
 __all__ = ["DoubleBeeVelocityEnvCfg"]
+
+# PLAY variants of the actuation ablations, 2026-09-09. These exist so every
+# result in the simulation section is measured on ONE terrain: the ablation
+# checkpoints cannot load into ...-Play-v1-ppo because their observation and
+# action widths differ (39/2, 40/3, 39/2 against 41/4).
+for _sfx, _cfg in (
+    ("ConstThrust", DoubleBeeHybridStairConstantThrustCfg_PLAY),
+    ("WheelsOnly", DoubleBeeHybridStairWheelsOnlyCfg_PLAY),
+    ("WheelsServos", DoubleBeeHybridStairWheelsServosCfg_PLAY),
+    ("PropellerOnly", DoubleBeeHybridStairPropellerOnlyCfg_PLAY),
+):
+    gym.register(
+        id="Isaac-Velocity-HybridStair-DoubleBee-%s-Play-v1-ppo" % _sfx,
+        entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": _cfg,
+            "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+            "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+            "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+        },
+    )
