@@ -560,3 +560,45 @@ class DoubleBeeHybridStairPropellerOnlyCfg(DoubleBeeHybridStairCfg):
     """
 
     actions: ActionsCfg4DPropellerOnly = ActionsCfg4DPropellerOnly()
+
+
+# ---------------------------------------------------------------------------
+# PLAY variants of the actuation ablations.
+#
+# Added 2026-09-09. Without these the ablation checkpoints could only be
+# evaluated on the TRAINING terrain, because they cannot load into
+# ...-Play-v1-ppo: wheels-only is 39 obs / 2 actions, wheels+servos 40/3,
+# propeller-only 39/2, against Play's 41/4. That left the energy sweep on the
+# play terrain and the actuator ablations on the training terrain, i.e. two
+# evaluation terrains in one results section.
+#
+# Each inherits the play terrain and aligned initialisation from
+# DoubleBeeHybridStairCfg_PLAY and overrides only `actions`, exactly as the
+# training variants override only `actions` on DoubleBeeHybridStairCfg.
+# ---------------------------------------------------------------------------
+@configclass
+class DoubleBeeHybridStairConstantThrustCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
+    """Fixed-allocation baseline on the play terrain."""
+
+    actions: ActionsCfg4DConstantThrust = ActionsCfg4DConstantThrust()
+
+
+@configclass
+class DoubleBeeHybridStairWheelsOnlyCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
+    """Wheels only, on the play terrain."""
+
+    actions: ActionsCfgWheelsOnly4D = ActionsCfgWheelsOnly4D()
+
+
+@configclass
+class DoubleBeeHybridStairWheelsServosCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
+    """Wheels and tilt servos, no thrust, on the play terrain."""
+
+    actions: ActionsCfgWheelsServosOnly4D = ActionsCfgWheelsServosOnly4D()
+
+
+@configclass
+class DoubleBeeHybridStairPropellerOnlyCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
+    """Propellers and servos, wheels inert, on the play terrain."""
+
+    actions: ActionsCfg4DPropellerOnly = ActionsCfg4DPropellerOnly()
