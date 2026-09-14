@@ -128,6 +128,25 @@ WHEEL_TORQUE_LIMIT_NM = WHEEL_CMD_LIMIT   # kept: name used by describe()/report
 # Robot weight, for reporting thrust as a fraction of weight.
 ROBOT_WEIGHT_N = 3.2182 * 9.81       # 31.57 N
 
+# --- Wheel command path, for calibrating Eq. (23). -------------------------
+#
+# tau_w is NOT a torque once it leaves this file. play_dctrl.py does
+#     wheel_action = clip(tau_w / 2.0, -1, 1)
+# and the action maps to a wheel VELOCITY through WHEEL_VEL_LIMIT_RAD_S. So the
+# commanded ground speed per unit of tau_w is
+#     r * WHEEL_VEL_LIMIT / FULL_SCALE = 0.06 * 23.6 / 2.0 = 0.708 m/s
+# and a Kvd of 1/0.708 = 1.412 makes Eq. (23) command exactly v_desired.
+#
+# This matters because [7] Eq. (23) is a FEEDFORWARD law written for a torque
+# input. Ported to a velocity input it is still feedforward, but its gain has
+# to be calibrated to the interface or the number is arbitrary.
+WHEEL_RADIUS_M = 0.06
+WHEEL_VEL_LIMIT_RAD_S = 23.6         # actions.py
+WHEEL_CMD_FULL_SCALE = 2.0           # the /2.0 in play_dctrl.py
+MPS_PER_WHEEL_CMD = (WHEEL_RADIUS_M * WHEEL_VEL_LIMIT_RAD_S
+                     / WHEEL_CMD_FULL_SCALE)          # 0.708 m/s per unit
+KV_UNITY = 1.0 / MPS_PER_WHEEL_CMD                    # 1.412
+
 
 class DecoupledBaseline:
     """Decoupled-mode controller, DoubleBee [7] Eqs (19)-(23).
@@ -146,10 +165,37 @@ class DecoupledBaseline:
     """
 
     def __init__(self, mode="faithful", use_eq20_sign=True,
-                 servo_bias_sign=+1.0, enforce_limits=True, dt=0.02):
+                 servo_bias_sign=+1.0, enforce_limits=True, dt=0.02,
+                 wheel_law=None):
         if mode not in ("faithful", "augmented"):
             raise ValueError("mode must be 'faithful' or 'augmented', got %r" % mode)
         self.mode = mode
+
+        # --- Eq. (23) form. VERIFIED against arXiv:2303.05075v2 on 2026-09-11.
+        #
+        # The paper prints a FEEDFORWARD law on the DESIRED values:
+        #     tau_w1 = Kvd*vd - Ksd*w_gd
+        #     tau_w2 = Kvd*vd + Ksd*w_gd
+        # This file previously used the velocity and steer-rate ERRORS instead,
+        # and called that "faithful". It is not, and it was not disclosed.
+        #
+        # It also made the baseline slow, which is the failure mode that loses a
+        # step climb for the wrong reason. tau_w drives a VELOCITY-commanded
+        # actuator, so a proportional error law with no integrator cannot reach
+        # its setpoint: with Kv_d = 1.0 the closed loop settles at
+        #     v = v_d * 0.708*Kv_d / (1 + 0.708*Kv_d) = 0.41 * v_d
+        # i.e. 59 % short, against 0.30 m/s commanded. The published feedforward
+        # law with a calibrated gain commands v_d exactly.
+        #
+        #   "feedforward"  [7] Eq. (23) as printed. Default for mode="faithful".
+        #   "error"        the previous behaviour, kept so the two can be
+        #                  compared, and DECLARED as a deviation by describe().
+        if wheel_law is None:
+            wheel_law = os.environ.get("DOUBLEBEE_WHEEL_LAW", "feedforward")
+        if wheel_law not in ("feedforward", "error"):
+            raise ValueError("wheel_law must be 'feedforward' or 'error', got %r"
+                             % wheel_law)
+        self.wheel_law = wheel_law
         # DOUBLEBEE_EQ20=0 disables the Eq. (20) sign rule for an A/B. The rule
         # is transcribed literally from the paper, but the paper's theta/sigma
         # sign convention is not obviously the same as our USD's, and if it is
@@ -159,7 +205,74 @@ class DecoupledBaseline:
         if _eq20_env is not None:
             use_eq20_sign = _eq20_env not in ("0", "false", "False", "")
         self.use_eq20_sign = bool(use_eq20_sign)
-        self.servo_bias_sign = float(servo_bias_sign)
+        self.servo_bias_sign = float(
+            os.environ.get("DOUBLEBEE_SERVO_BIAS_SIGN", servo_bias_sign))
+
+        # Sign of the -theta FEEDFORWARD in Eq. (22).
+        #
+        # [7] writes sigma = -theta + PID(...), whose purpose is to hold the
+        # thrust vector vertical in the WORLD while the body leans. Whether
+        # -theta or +theta achieves that depends on the servo-positive
+        # convention of the USD, which is not the paper's figure. If it is
+        # backwards, the "feedforward" tilts thrust to twice the lean instead of
+        # to vertical, and the controller drives the robot over while its own
+        # correction saturates -- which is exactly what was observed on
+        # 2026-09-11: monotonic divergence from upright with sigma pinned at
+        # +45 deg, while hardware Decouple 2 held level pitch to 3.6 deg sd.
+        #
+        # +1 reproduces the paper as printed. Settle by experiment, then pin it
+        # and state which was used.
+        self.servo_ff_sign = float(os.environ.get("DOUBLEBEE_SERVO_FF_SIGN", 1.0))
+
+        # --- Wheel command sign. A CONVENTION, not a gain. ---
+        #
+        # Measured 2026-09-11: with the target dead ahead (bearing 0.0 deg) and
+        # v_desired = +0.37 m/s, the distance to target INCREASED and the
+        # measured forward speed was negative. A positive wheel command drives
+        # this robot away from where Eq. (23) intends.
+        #
+        # This is definitive rather than inferred: in wheel_law="feedforward"
+        # the command never reads the measured velocity, so it cannot be a
+        # feedback sign error. The command itself is inverted.
+        #
+        # It is the same class of difference as servo_ff_sign and
+        # servo_bias_sign: our USD's positive directions are not the paper
+        # figure's. The policy is unaffected because it learned whatever sign
+        # the simulator uses; only a hand-written law has to be told.
+        self.wheel_sign = float(os.environ.get("DOUBLEBEE_WHEEL_SIGN", 1.0))
+
+        # --- Step-triggered thrust boost. A DECLARED DEVIATION from [7]. ---
+        #
+        # Why it is needed, and why adding it is fair rather than cheating.
+        #
+        # In [7] thrust answers to ONE signal: pitch error (Eq. 21). Nothing
+        # connects "the wheels are blocked" to "command more thrust". At a step
+        # the wheel stalls at its 0.51 N.m limit against the 0.95 N.m the
+        # geometry needs, the pitch may be tracking perfectly, and so the
+        # propellers sit at T_hold and never hear about it. The propellers are
+        # not the limit: they can make 36.6 N and are holding 17.3.
+        #
+        # The single indirect path makes it worse. Detecting a step commands a
+        # lean, the lean creates pitch error, and thrust does rise -- but only
+        # until the lean is reached, and leaning tilts the thrust vector away
+        # from vertical, which is the component that unloads the wheels:
+        #     upright   17.3 N vertical   >= the 14.6 N needed
+        #     40 deg    13.3 N            <  14.6 N
+        #     45 deg    12.2 N            <  14.6 N
+        # So the architecture's response to an obstacle reduces the quantity
+        # that would overcome it.
+        #
+        # The real robot's deployment stack already solves this the same way:
+        # db_inference.py runs --prop_scale_step 4.0 to 5.0. Giving the baseline
+        # the same affordance makes it stronger, which is the direction a
+        # baseline should be wrong in.
+        #
+        # 1.0 = off = faithful. Scales T_hold by this at a fully detected step.
+        self.t_step_boost = float(os.environ.get("DOUBLEBEE_T_STEP_BOOST", 1.0))
+        # Blend sigma toward vertical at a step, so the extra thrust actually
+        # unloads the wheels instead of pushing sideways. 0 = off = faithful.
+        self.step_sigma_blend = float(
+            os.environ.get("DOUBLEBEE_STEP_SIGMA_BLEND", 0.0))
         self.enforce_limits = bool(enforce_limits)
         self.dt = float(dt)
 
@@ -184,8 +297,13 @@ class DecoupledBaseline:
         # -> ~2 deg of chatter.
         self.Ksig_d = float(os.environ.get("DOUBLEBEE_KSIG_D", 0.08))
 
-        # --- Eq. (23): wheel torque from desired velocity and steer rate ---
-        self.Kv_d = 1.0
+        # --- Eq. (23): wheel command from desired velocity and steer rate ---
+        #
+        # Under "feedforward" the gain is CALIBRATED, not picked: KV_UNITY makes
+        # the commanded wheel surface speed equal v_desired, which is what the
+        # published law means once the input is a velocity rather than a torque.
+        # Under "error" the legacy 1.0 is kept so old results reproduce.
+        self.Kv_d = KV_UNITY if self.wheel_law == "feedforward" else 1.0
         self.Ks_d = 0.08
 
         # T_hold: "the level of throttle capable of lifting the robot from a
@@ -274,7 +392,7 @@ class DecoupledBaseline:
     # ------------------------------------------------------------------
     def control(self, theta, theta_dot, v, v_desired=0.0,
                 theta_desired=0.0, yaw_rate=0.0, yaw_rate_desired=0.0,
-                yaw=0.0, yaw_gain_scale=1.0):
+                yaw=0.0, yaw_gain_scale=1.0, step_ahead=0.0):
         """One control step.
 
         Signature and return keys match doublebee_dctrl.DecoupledController,
@@ -321,7 +439,12 @@ class DecoupledBaseline:
         self._dTe_f += self.d_lpf_alpha * (dTe_raw - self._dTe_f)
         self._prev_Te = Te
 
-        T = (self.T_hold
+        # Step boost, if enabled. step_ahead is 0 on flat ground and 1 at a
+        # fully detected step, so at the default boost of 1.0 this is a no-op.
+        _sa = float(np.clip(step_ahead, 0.0, 1.0))
+        _hold = self.T_hold * (1.0 + (self.t_step_boost - 1.0) * _sa)
+
+        T = (_hold
              + self.Kt_p * Te
              + self.Kt_i * self._int_Te
              + self.Kt_d * self._dTe_f)
@@ -341,16 +464,28 @@ class DecoupledBaseline:
         self._dsig_f += self.d_lpf_alpha * (dsig_raw - self._dsig_f)
         self._prev_sig_e = sig_e
 
-        sigma = (-theta + self.servo_bias_sign * (
+        sigma = (-self.servo_ff_sign * theta + self.servo_bias_sign * (
                  self.Ksig_p * sig_e
                  + self.Ksig_i * self._int_sig
                  + self.Ksig_d * self._dsig_f))
+        # Pull sigma toward 0 (thrust vertical) at a step, so the boost unloads
+        # the wheels rather than pushing the robot sideways. Declared deviation.
+        if self.step_sigma_blend > 0.0:
+            sigma *= (1.0 - self.step_sigma_blend * _sa)
+
         if self.enforce_limits:
             sigma = float(np.clip(sigma, -SERVO_LIMIT_RAD, SERVO_LIMIT_RAD))
 
-        # --- Eq. (23): wheel torque from desired velocity and steer rate ---
-        speed_term = self.Kv_d * (v_desired - v)
-        steer_term = self.Ks_d * (yaw_rate_desired - yaw_rate)
+        # --- Eq. (23) ---
+        if self.wheel_law == "feedforward":
+            # [7] as printed: the DESIRED values, no feedback.
+            speed_term = self.Kv_d * v_desired
+            steer_term = self.Ks_d * yaw_rate_desired
+        else:
+            # Declared deviation: proportional error feedback.
+            speed_term = self.Kv_d * (v_desired - v)
+            steer_term = self.Ks_d * (yaw_rate_desired - yaw_rate)
+        speed_term *= self.wheel_sign
         tau_w1 = speed_term - steer_term
         tau_w2 = speed_term + steer_term
 
@@ -359,6 +494,23 @@ class DecoupledBaseline:
             # as |theta| grows because thrust regains lever arm there.
             blend = float(np.clip(
                 1.0 - abs(theta) / np.radians(self.balance_blend_deg), 0.0, 1.0))
+            # wheel_sign expresses how a wheel COMMAND maps to physical
+            # motion on this machine (measured 2026-09-13: a positive common
+            # command drives it backwards). Every term that commands motion
+            # must therefore carry it. It was applied to speed_term only, so
+            # the drive term and the balance term sat in opposite conventions:
+            # the robot accelerated forward, the resulting lean fed a balance
+            # correction of the wrong sign, and it reversed. Symptom was
+            # "goes forward then turns back" with zero height gain in all eight
+            # sign combinations of the servo and pitch flags.
+            # REVERTED 2026-09-13. wheel_sign was applied here for one test and
+            # it broke balancing: the machine leaned back slowly and fell every
+            # time. Working it through, the original is right. wheel_sign maps a
+            # DESIRED PHYSICAL FORWARD velocity to a command. Correcting a
+            # backward lean (theta > 0) needs physical motion BACKWARD, i.e.
+            # desired_forward = -Kb*theta, so the command is
+            # wheel_sign * (-Kb*theta) = +Kb*theta when wheel_sign = -1.
+            # The raw form below already IS the sign-corrected one.
             wheel_balance = self.Kb_p * theta + self.Kb_d * theta_dot
             # NOT in [7] either. Heading hold toward yaw = 0.
             heading = self.yaw_sign * self.Kyaw_p * yaw_gain_scale * (0.0 - yaw)
@@ -386,11 +538,34 @@ class DecoupledBaseline:
             "controller": "DoubleBee decoupled mode, Cao et al. IROS 2023, Eqs (19)-(23)",
             "mode": self.mode,
             "deviations_from_published": (
-                [] if self.mode == "faithful" else
-                ["wheel pitch feedback Kb_p*theta + Kb_d*theta_dot (not in Eq. 23)",
-                 "heading hold Kyaw_p*(0 - yaw) (not in Eq. 23)"]),
+                ([] if self.mode == "faithful" else
+                 ["wheel pitch feedback Kb_p*theta + Kb_d*theta_dot (not in Eq. 23)",
+                  "heading hold Kyaw_p*(0 - yaw) (not in Eq. 23)"])
+                + ([] if self.wheel_law == "feedforward" else
+                   ["Eq. (23) uses velocity/steer-rate ERROR, not the printed "
+                    "feedforward on the desired values"])
+                + ([] if self.t_step_boost == 1.0 else
+                   ["step-triggered thrust boost x%.2f on T_hold (not in [7]; "
+                    "mirrors db_inference.py --prop_scale_step)" % self.t_step_boost])
+                + ([] if self.step_sigma_blend == 0.0 else
+                   ["sigma blended %.2f toward vertical at a step (not in [7])"
+                    % self.step_sigma_blend])
+                + ["thrust floored at the static-stability threshold (not in [7])",
+                   "integrator anti-windup clamps (not in [7])",
+                   "derivative low-pass alpha=%.2f (not in [7])" % self.d_lpf_alpha,
+                   "per-propeller thrust clip at %.2f N (not in [7])" % T_MAX_PER_PROP_N]),
+            "wheel_law": self.wheel_law,
+            "wheel_cmd_calibration": {
+                "mps_per_unit_tau_w": round(MPS_PER_WHEEL_CMD, 4),
+                "Kv_d_for_unity_tracking": round(KV_UNITY, 4),
+                "commands_v_desired_exactly": (
+                    self.wheel_law == "feedforward"
+                    and abs(self.Kv_d - KV_UNITY) < 1e-6),
+            },
             "eq20_sign_rule": self.use_eq20_sign,
             "servo_bias_sign": self.servo_bias_sign,
+            "servo_ff_sign": self.servo_ff_sign,
+            "wheel_sign": self.wheel_sign,
             "dt_s": self.dt, "rate_hz": round(1.0 / self.dt, 1),
             "gains": {
                 "Kp_d": self.Kp_d,

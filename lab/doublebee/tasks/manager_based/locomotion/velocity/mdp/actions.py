@@ -474,6 +474,213 @@ class ConstantPropellerActionCfg(TiedJointVelocityActionCfg):
     hold_action: float = 1.0
 
 
+_SWITCH_DIAG = os.environ.get("DOUBLEBEE_SWITCH_DIAG", "0") not in ("0", "", "false")
+
+
+class SwitchedPropellerAction(ConstantPropellerAction):
+    """Propellers switched between two fixed levels by a hand-written rule.
+
+    THE BASELINE IROS R1 ACTUALLY ASKED FOR. The constant-thrust arms answer
+    "does modulation beat NOT modulating", but a reviewer can fairly say that a
+    controller nobody would build is a strawman: no engineer holds one thrust
+    for a whole traverse. The architecture the introduction attacks is
+    "drive when possible, fly otherwise" -- a mode switch fired by a hand-chosen
+    threshold on perceived terrain. That is this class.
+
+    The rule, in full:
+
+        if a step is detected ahead:   propellers := hold_high
+        else:                          propellers := hold_low
+
+    with a latch so the high mode persists for `latch_s` after the last
+    detection. Wheels and servos remain under policy control, exactly as in
+    ConstantPropellerAction, so the ONLY thing removed is continuous thrust
+    modulation; what replaces it is discrete thrust modulation on a threshold.
+
+    FAIRNESS, and why each choice goes the baseline's way.
+
+    * Same information. The trigger reads the same 4x4 height scanner the policy
+      receives in its observation. The `baseline` notes are explicit that
+      "sees the terrain vs doesn't" must not ride along as "learned vs
+      classical", so the switch is given the terrain, not denied it.
+    * Same actuators, same limits, same reward, same terrain, same episodes.
+    * Noise-free and zero-latency. The trigger reads the sensor directly rather
+      than the delayed observation buffer the policy gets (velocity_env_cfg
+      delays observations one control step). The baseline therefore sees the
+      step BEFORE the policy does.
+    * Tunable. hold_low, hold_high, the detection threshold, the lookahead and
+      the latch are all swept from the environment, so "you under-tuned it" has
+      a numeric answer: the number of configurations evaluated.
+
+    If the learned policy still wins against that, the introduction's claim is
+    measured rather than asserted. If it ties, that is a real and reportable
+    result: the win would be in timing rather than thresholding, and the paper
+    should say so.
+
+    DETECTION. Ray hits are taken in the sensor's yaw-aligned frame, so a ray is
+    "forward" by its actual geometry rather than by an assumed index order in
+    the grid pattern (the pattern's flattening convention is an Isaac Lab
+    implementation detail and must not be load-bearing here). A step is present
+    when the highest forward hit stands `step_thresh` above the median of the
+    rearward hits, which is the plane the robot is currently standing on. Using
+    the rearward median rather than the median of ALL rays matters: the scan is
+    only 0.21 m across, so at a step edge up to half the rays already sit on the
+    upper plane and an all-ray median tracks the step instead of the ground.
+
+    The 4x4 grid at 0.07 m resolution reaches about 0.105 m ahead of the sensor,
+    which bounds `lookahead`; values above that simply use every forward ray.
+    """
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        # NOTE: ActionTerm's base already binds self._env to this same object;
+        # it is read here rather than rebound.
+        self._low = float(getattr(cfg, "hold_low", -0.45))
+        self._high = float(getattr(cfg, "hold_high", 1.0))
+        self._step_thresh = float(getattr(cfg, "step_thresh", 0.02))
+        self._lookahead = float(getattr(cfg, "lookahead", 0.105))
+        self._sensor_name = str(getattr(cfg, "sensor_name", "height_scanner"))
+        latch_s = float(getattr(cfg, "latch_s", 0.5))
+        # step_dt is the CONTROL period (sim.dt * decimation), which is what a
+        # latch in seconds must be measured in.
+        dt = float(getattr(env, "step_dt", 0.02)) or 0.02
+        self._latch_steps = max(1, int(round(latch_s / dt)))
+        self._latch = torch.zeros(self.num_envs, device=self.device)
+        # Duty cycle, so the paper can report how much of an episode the switch
+        # spent in each mode instead of leaving it as an unexamined knob.
+        self._fired = torch.zeros(self.num_envs, device=self.device)
+        self._ticks = 0
+
+    def _step_detected(self) -> torch.Tensor:
+        """(N,) bool: is there a step within `lookahead` of the sensor?"""
+        try:
+            hs = self._env.scene[self._sensor_name]
+        except (KeyError, AttributeError):
+            # No scanner in this scene. Fail to the CONSTANT baseline at
+            # hold_high rather than silently producing a third, undocumented
+            # arm: a missing sensor must not look like a result.
+            return torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+
+        hits = torch.nan_to_num(hs.data.ray_hits_w, nan=0.0,
+                                posinf=0.0, neginf=0.0)          # (N, R, 3)
+        org = hs.data.pos_w                                       # (N, 3)
+        q = hs.data.quat_w                                        # (N, 4) wxyz
+        # Yaw only: the scanner is configured attach_yaw_only=True, so roll and
+        # pitch of the body must not rotate the forward axis.
+        siny = 2.0 * (q[:, 0] * q[:, 3] + q[:, 1] * q[:, 2])
+        cosy = 1.0 - 2.0 * (q[:, 2] ** 2 + q[:, 3] ** 2)
+        yaw = torch.atan2(siny, cosy).unsqueeze(-1)               # (N, 1)
+
+        dx = hits[..., 0] - org[:, 0:1]
+        dy = hits[..., 1] - org[:, 1:2]
+        # SIM FORWARD IS BODY +Y, not +X. rewards.py:264 states it outright
+        # ("fwd/back (sim forward = +Y)") and play_dctrl's axis note derives the
+        # same thing: v_fwd = lin_vel[1] and pitch rate is ang_vel[0].
+        #
+        # This projected onto body +X until 2026-09-12, i.e. it scanned past the
+        # robot's shoulder instead of ahead of it. The trigger then fired on
+        # terrain beside the robot, so thrust went high at arbitrary moments and
+        # both switched arms scored WORSE than holding their own low level
+        # constant (9.7 % against 44.9 % at 3 cm). Retrained after the fix.
+        fwd = -dx * torch.sin(yaw) + dy * torch.cos(yaw)          # (N, R)
+        z = hits[..., 2]
+
+        ahead = fwd > 0.0
+        behind = ~ahead
+        within = ahead & (fwd <= self._lookahead)
+
+        neg_inf = torch.finfo(z.dtype).min
+        top = torch.where(within, z, torch.full_like(z, neg_inf)).max(dim=1)[0]
+
+        # Median of the rearward rays = the plane the robot stands on. Masked
+        # medians are awkward, so push the forward rays to +inf: with an even
+        # split torch.median takes the lower of the two middle values, which is
+        # the rearward half.
+        pos_inf = torch.finfo(z.dtype).max
+        ground = torch.where(behind, z, torch.full_like(z, pos_inf)).median(dim=1)[0]
+
+        ok = within.any(dim=1) & behind.any(dim=1)
+        return ok & ((top - ground) >= self._step_thresh)
+
+    def process_actions(self, actions: torch.Tensor):
+        # Keep the policy's request faithful in the log and in the `actions`
+        # observation term, then discard it, exactly as ConstantPropellerAction
+        # does. The action-rate penalty reads these too.
+        self._raw_actions[:] = actions
+
+        det = self._step_detected()
+        self._latch = torch.where(
+            det,
+            torch.full_like(self._latch, float(self._latch_steps)),
+            torch.clamp(self._latch - 1.0, min=0.0),
+        )
+        hot = self._latch > 0.0                      # (N,)
+        self._fired += hot.float()
+        self._ticks += 1
+
+        # (N,1), NOT (N,). _raw_actions is (N, 1) for this tied term, and a
+        # 1-D mask broadcasts against it to (N, N) instead of selecting
+        # per-environment. That produced a 1024x1024 tensor and a shape error
+        # one line later; it would have been far worse had the shapes happened
+        # to line up.
+        # DIAGNOSTIC. A trigger that never fires degenerates this arm into a
+        # constant-thrust arm at hold_low, silently, and the result would look
+        # like a plausible baseline rather than a broken one. Set
+        # DOUBLEBEE_SWITCH_DIAG=1 to print the duty cycle periodically and
+        # confirm the switch is doing something on the real terrain.
+        if _SWITCH_DIAG and self._ticks % 200 == 0:
+            print("[switch] tick %7d  duty %.3f  hot now %4d/%d"
+                  % (self._ticks, self.duty, int(hot.sum().item()),
+                     self.num_envs), flush=True)
+
+        hot_col = hot.unsqueeze(-1)
+        held = torch.where(hot_col,
+                           torch.full_like(self._raw_actions, self._high),
+                           torch.full_like(self._raw_actions, self._low))
+        torch.mul(held, self._tied_scale, out=self._processed_actions)
+        self._processed_actions.add_(self._tied_offset)
+
+    @property
+    def duty(self) -> float:
+        """Fraction of control steps spent in the high-thrust mode."""
+        if self._ticks == 0:
+            return float("nan")
+        return float(self._fired.mean().item() / self._ticks)
+
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            self._latch.zero_()
+        else:
+            self._latch[env_ids] = 0.0
+        return super().reset(env_ids)
+
+
+@configclass
+class SwitchedPropellerActionCfg(TiedJointVelocityActionCfg):
+    class_type: type[ActionTerm] = SwitchedPropellerAction
+
+    # Thrust away from a step. Default -0.45 = 7.3 N, T/W 0.23, just above the
+    # static-stability threshold of Section II-A, which is what a sane engineer
+    # would hold while driving: enough not to fall over, nowhere near enough to
+    # climb.
+    hold_low: float = -0.45
+    # Thrust at a step. Default +1.0 = 17.3 N, T/W 0.55, the published
+    # decoupled controller's BB_HOV_DC hold point and the top of the swept
+    # fixed-allocation range.
+    hold_high: float = 1.0
+    # Height above the supporting plane that counts as a step, metres. 0.02 sits
+    # below the smallest trained step (0.03) so no real step is missed.
+    step_thresh: float = 0.02
+    # Forward reach of the trigger, metres. The 4x4 / 0.07 m grid tops out near
+    # 0.105; larger values just use every forward ray.
+    lookahead: float = 0.105
+    # Seconds the high mode persists after the last detection. Without a latch
+    # the trigger chatters as body pitch sweeps the scan across the edge, and no
+    # hand-built controller would ship that.
+    latch_s: float = 0.5
+    sensor_name: str = "height_scanner"
+
+
 @configclass
 class ActionsCfg:
     """Action specifications for DoubleBee robot."""
@@ -881,6 +1088,42 @@ class ActionsCfg4DConstantThrust(ActionsCfg4D):
         # Default 1.0 = 17.3 N total, T/W 0.55, the published decoupled
         # controller's BB_HOV_DC = 1335 us. Unchanged unless the env var is set.
         hold_action=float(os.environ.get("DOUBLEBEE_HOLD_ACTION", 1.0)),
+        use_default_offset=False,
+        preserve_order=True,
+    )
+
+
+@configclass
+class ActionsCfg4DSwitchedThrust(ActionsCfg4D):
+    """ActionsCfg4D with the propellers on a hand-written mode switch.
+
+    The mode-switching baseline of Section V. Identical to
+    ActionsCfg4DConstantThrust in every respect except that the held thrust is
+    chosen by a threshold on the height scan rather than fixed for the episode,
+    so the comparison isolates CONTINUOUS modulation against DISCRETE
+    modulation rather than against none at all.
+
+    Every knob is an environment variable so the sweep needs no code edit and
+    the tuning budget can be stated as a number:
+
+        DOUBLEBEE_SWITCH_LOW     thrust away from a step   (default -0.45)
+        DOUBLEBEE_SWITCH_HIGH    thrust at a step          (default  1.00)
+        DOUBLEBEE_SWITCH_THRESH  step detection height, m  (default  0.02)
+        DOUBLEBEE_SWITCH_LOOKAHEAD  forward reach, m       (default  0.105)
+        DOUBLEBEE_SWITCH_LATCH   high-mode hold, s         (default  0.50)
+    """
+
+    propeller_vel = SwitchedPropellerActionCfg(
+        asset_name="robot",
+        joint_names=["leftPropeller", "rightPropeller"],
+        scale=1.0,
+        tied_scale={"leftPropeller": 320.0, "rightPropeller": -320.0},
+        tied_offset={"leftPropeller": 320.0, "rightPropeller": -320.0},
+        hold_low=float(os.environ.get("DOUBLEBEE_SWITCH_LOW", -0.45)),
+        hold_high=float(os.environ.get("DOUBLEBEE_SWITCH_HIGH", 1.0)),
+        step_thresh=float(os.environ.get("DOUBLEBEE_SWITCH_THRESH", 0.02)),
+        lookahead=float(os.environ.get("DOUBLEBEE_SWITCH_LOOKAHEAD", 0.105)),
+        latch_s=float(os.environ.get("DOUBLEBEE_SWITCH_LATCH", 0.5)),
         use_default_offset=False,
         preserve_order=True,
     )

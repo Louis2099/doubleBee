@@ -132,6 +132,27 @@ def main():
         env_cfg.sim.render_interval = int(os.environ["DOUBLEBEE_RENDER_INTERVAL"])
         print("[perf] sim.render_interval = %d" % env_cfg.sim.render_interval, flush=True)
 
+    # DOUBLEBEE_RESUME_PATH: warm start from an explicit checkpoint FILE.
+    #
+    # There is no --resume flag, so every warm start so far was made by editing
+    # co_rl_tqc_cfg.py before launching and editing it back afterwards. The
+    # repo therefore reads `resume: false` while the runs that matter were
+    # warm started, and the only surviving record is each run's own dumped
+    # params/agent.yaml. That is how the hE4 lineage became hard to reconstruct
+    # (baseline_4000/warm_start.pt -> wE0@1400 -> gE0@1900 -> hE4@5899).
+    #
+    # This takes a path instead of a regex on purpose. get_checkpoint_path()
+    # matches run directories directly under log_root_path, and the runs it
+    # needs to reach now live one level down in energy_abl/, which the regex
+    # form cannot express.
+    _resume_path = os.environ.get("DOUBLEBEE_RESUME_PATH")
+    if _resume_path:
+        _resume_path = os.path.abspath(os.path.expanduser(_resume_path))
+        if not os.path.isfile(_resume_path):
+            raise SystemExit("DOUBLEBEE_RESUME_PATH does not exist: %s" % _resume_path)
+        agent_cfg.resume = True
+        print("[resume] warm start from %s" % _resume_path, flush=True)
+
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
     )
@@ -183,7 +204,8 @@ def main():
 
     # save resume path before creating a new log_dir
     if agent_cfg.resume:
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        resume_path = _resume_path or get_checkpoint_path(
+            log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
     # wrap for video recording
     if args_cli.video:
@@ -225,7 +247,8 @@ def main():
     # save resume path before creating a new log_dir
     if agent_cfg.resume:
         # get path to previous checkpoint
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        resume_path = _resume_path or get_checkpoint_path(
+            log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         # DOUBLEBEE_RESUME_FRESH_OPTIM=1 skips restoring the Adam state.

@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import os  # DOUBLEBEE_PLAY_TARGET_Y/Z render overrides (2026-09-13)
+
 import isaaclab.terrains as terrain_gen
 from isaaclab.terrains import TerrainImporterCfg, FlatPatchSamplingCfg
 from isaaclab.terrains.terrain_generator_cfg import TerrainGeneratorCfg
@@ -203,8 +205,8 @@ STAIR_TERRAINS_CFG_PLAY = TerrainGeneratorCfg(
                     # STAIR_TERRAINS_CFG too. A play target the policy never
                     # trained on makes play misleading in exactly the asymmetric
                     # way documented on step_height_range above.
-                    y_range=(1.5, 3.2),   # match training
-                    z_range=(0.03, 0.20), # match training
+                    y_range=tuple(float(v) for v in os.environ.get("DOUBLEBEE_PLAY_TARGET_Y", "1.5,3.2").split(",")),   # match training
+                    z_range=tuple(float(v) for v in os.environ.get("DOUBLEBEE_PLAY_TARGET_Z", "0.03,0.20").split(",")), # match training
                     max_height_diff=0.25,
                 ),
             },

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+import os
 import torch
 from isaaclab.assets import AssetBaseCfg
 from lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env_cfg import (
@@ -14,6 +15,7 @@ from lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env_cfg im
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.sensors import RayCasterCfg, ContactSensorCfg, patterns
+from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.managers import SceneEntityCfg
 import isaaclab.sim as sim_utils
 from isaaclab.utils import configclass
@@ -89,7 +91,20 @@ class DoubleBeeVelocityEnvCfg(ManagerBasedConstraintRLEnvCfg):
                 resolution=0.07,  # 7cm spacing between rays
                 size=[0.21, 0.21]  # 21cm x 21cm square → 4x4 grid (16 rays)
             ),
-            debug_vis=False,  # Disable visualization to avoid headless mode issues
+            # DOUBLEBEE_SCAN_VIS=1 draws the ray hits, for figure renders only
+            # (2026-09-13). Default OFF: training and evaluation are unchanged.
+            debug_vis=os.environ.get("DOUBLEBEE_SCAN_VIS", "0") not in ("0", "", "false", "False"),
+            # DOUBLEBEE_SCAN_RGB="r,g,b" and DOUBLEBEE_SCAN_R set the colour and
+            # radius of the drawn ray hits, for figure renders (2026-09-13). The
+            # defaults reproduce Isaac Lab's red 2 cm markers exactly.
+            visualizer_cfg=VisualizationMarkersCfg(
+                prim_path="/Visuals/RayCaster",
+                markers={"hit": sim_utils.SphereCfg(
+                    radius=float(os.environ.get("DOUBLEBEE_SCAN_R", 0.02)),
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=tuple(
+                        float(v) for v in os.environ.get("DOUBLEBEE_SCAN_RGB", "1.0,0.0,0.0").split(","))),
+                )},
+            ),
             mesh_prim_paths=["/World/ground"],  # Raycast against terrain
         )
         
@@ -103,19 +118,31 @@ class DoubleBeeVelocityEnvCfg(ManagerBasedConstraintRLEnvCfg):
         )
         
         # Lighting (to make robot visible)
+        #
+        # The DOME LIGHT IS THE VISIBLE SKY, so its colour is both the
+        # background behind the robot and a source of illumination. At the
+        # default pale (0.8, 0.8, 1.0) a light-coloured robot has almost no
+        # separation from the horizon. For renders, darken the dome and raise
+        # the distant light to compensate: dark background, directional key.
+        #   DOUBLEBEE_SKY_RGB=0.05,0.06,0.12
+        #   DOUBLEBEE_SKY_INTENSITY=300
+        #   DOUBLEBEE_SUN_INTENSITY=6000
+        # Defaults are unchanged, so training and every measured result are
+        # unaffected.
         light = AssetBaseCfg(
             prim_path="/World/light",
             spawn=sim_utils.DistantLightCfg(
                 color=(1.0, 1.0, 1.0),
-                intensity=3000.0,
+                intensity=float(os.environ.get("DOUBLEBEE_SUN_INTENSITY", 3000.0)),
             ),
         )
-        
+
         dome_light = AssetBaseCfg(
             prim_path="/World/skyLight",
             spawn=sim_utils.DomeLightCfg(
-                color=(0.8, 0.8, 1.0),
-                intensity=1000.0,
+                color=tuple(float(v) for v in os.environ.get(
+                    "DOUBLEBEE_SKY_RGB", "0.8,0.8,1.0").split(",")),
+                intensity=float(os.environ.get("DOUBLEBEE_SKY_INTENSITY", 1000.0)),
             ),
         )
 

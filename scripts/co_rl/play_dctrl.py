@@ -64,6 +64,18 @@ parser.add_argument("--obs_latency_steps", type=int, default=0, help="Delay poli
 # logic elsewhere (and risk handicapping the thing we are comparing against),
 # the terrain pinning and the climb metric live here, around the controller that
 # actually gets cited.
+# Camera, copied from play.py so the same flags work here. Body frame is
+# X = right, Y = forward, Z = up, so a side-on view (the one that shows a climb)
+# looks along X.
+parser.add_argument("--cam_follow", action="store_true", default=False,
+                    help="camera tracks the robot instead of a fixed world pose")
+parser.add_argument("--cam_eye", type=float, nargs=3, default=[2.0, 0.0, 0.5],
+                    metavar=("X", "Y", "Z"),
+                    help="camera position. With --cam_follow this is relative to "
+                         "the robot: (2,0,0.5) is side-on from the robot's right, "
+                         "which is the view that shows a stair climb.")
+parser.add_argument("--cam_lookat", type=float, nargs=3, default=[0.0, 0.0, 0.0],
+                    metavar=("X", "Y", "Z"), help="camera target, same frame")
 parser.add_argument("--step_height", type=float, default=None,
                     help="pin every staircase to this riser height in metres, "
                          "matching eval_climb.py, so baseline and policy are "
@@ -371,6 +383,19 @@ def main():
     log_dir = os.path.dirname(resume_path) if resume_path else log_root_path
 
     # create isaac environment
+    # Camera, same logic as play.py: only touch the viewer when a flag was
+    # actually given, so the default view is unchanged.
+    if args_cli.cam_follow or args_cli.cam_eye != [2.0, 0.0, 0.5] \
+            or args_cli.cam_lookat != [0.0, 0.0, 0.0]:
+        env_cfg.viewer.eye = tuple(args_cli.cam_eye)
+        env_cfg.viewer.lookat = tuple(args_cli.cam_lookat)
+        if args_cli.cam_follow:
+            env_cfg.viewer.origin_type = "asset_root"
+            env_cfg.viewer.asset_name = "robot"
+        print("[camera] eye=%s lookat=%s follow=%s"
+              % (env_cfg.viewer.eye, env_cfg.viewer.lookat, args_cli.cam_follow),
+              flush=True)
+
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
     # convert to single-agent instance if required by the RL algorithm
@@ -725,6 +750,24 @@ def main():
         _cl_base = env.unwrapped
         _cl_robot = _cl_base.scene["robot"]
         _cl_spawn = _cl_robot.data.root_pos_w.clone()
+
+        def _goal_dist(_pos):
+            """Horizontal distance to the current goal, or nan if unavailable.
+
+            Scoring a baseline on survival rewards driving AWAY from the
+            staircase, which is how DOUBLEBEE_WHEEL_SIGN=-1 was selected on
+            2026-09-12. Every row now carries progress toward the goal so that
+            cannot happen again.
+            """
+            try:
+                _c = env.unwrapped.command_manager._terms.get("base_velocity")
+                _t = _c.current_targets_w[0, :2]
+                return float(torch.norm(_pos[0, :2] - _t))
+            except Exception:
+                return float("nan")
+
+        _cl_d0 = _goal_dist(_cl_spawn)
+        _cl_maxdisp = 0.0
         _cl_hold_steps = max(1, int(args_cli.climb_hold / _cl_base.step_dt))
         _cl_up_th = 0.8 * (args_cli.step_height or 0.05)
         _cl_run = 0
@@ -776,8 +819,8 @@ def main():
         robot = env.unwrapped.scene["robot"]
         pos     = robot.data.root_pos_w[0]
         quat    = robot.data.root_quat_w[0]
-        lin_vel = robot.data.root_lin_vel_w[0]
-        ang_vel = robot.data.root_ang_vel_w[0]
+        lin_vel = robot.data.root_lin_vel_b[0]   # BODY frame: [1] is forward (+Y)
+        ang_vel = robot.data.root_ang_vel_b[0]   # BODY frame: [0] is pitch rate
 
         w, qx, qy, qz = quat[0].item(), quat[1].item(), quat[2].item(), quat[3].item()
 
@@ -817,6 +860,11 @@ def main():
                             else "MISMATCH -- axes disagree"), flush=True)
 
         yaw_rate_actual = ang_vel[2].item()
+        # Heading of the body FORWARD axis (+Y) in world. R(q) @ [0,1,0]:
+        _fx = 2.0 * (qx*qy - w*qz)
+        _fy = 1.0 - 2.0 * (qx*qx + qz*qz)
+        heading_w = float(np.arctan2(_fy, _fx))
+        # kept for logging only; referenced to +X, NOT comparable to a bearing
         yaw_actual = float(np.arctan2(2*(w*qz + qx*qy), 1 - 2*(qy*qy + qz*qz)))
 
         if not hasattr(env, "_decoupled_ctrl"):
@@ -904,14 +952,21 @@ def main():
             robot_xy = np.array([pos[0].item(), pos[1].item()])
             to_target = target_xy - robot_xy
             dist_to_target = np.linalg.norm(to_target)  # CHANGED: use FULL distance, not signed Y-only
-            bearing_to_target = float(np.arctan2(to_target[0], to_target[1]))
+            bearing_to_target = float(np.arctan2(to_target[1], to_target[0]))
 
             # proportional drive toward target — always positive (pull toward, never push away)
-            v_desired = float(np.clip(dist_to_target * 0.15, 0.0, 0.30))  # CHANGED: clipped to [0, 0.30], never negative
+            # Approach speed. Tunable because it is an INPUT to Eq. (23), not
+            # part of the published law, and because the real robot's
+            # successful decoupled climb peaked at 0.65 m/s against this 0.30
+            # cap. Momentum is one of the few honest levers this baseline has.
+            _vg = float(os.environ.get("DOUBLEBEE_V_GAIN", 0.15))
+            _vmax = float(os.environ.get("DOUBLEBEE_V_MAX", 0.30))
+            v_desired = float(np.clip(dist_to_target * _vg, 0.0, _vmax))
 
             # floor: keep pushing forward near/on a step
             if step_ahead_val > 0.1 or env._recent_step_max > 0.3:
-                v_desired = max(v_desired, 0.15)
+                v_desired = max(v_desired,
+                                float(os.environ.get("DOUBLEBEE_V_STEP", 0.15)))
 
         # safety: don't drive if genuinely unstable (not just settling post-climb)
         if abs(theta) > np.radians(10) and abs(theta_dot) > 1.5:
@@ -922,14 +977,22 @@ def main():
                 f"bearing={np.degrees(bearing_to_target):.1f}deg "
                 f"robot_xy={robot_xy.round(2)} target_xy={target_xy.round(2)}", flush=True)
 
+        # step_ahead lets the baseline raise thrust at a step, which [7] has no
+        # way to ask for. Only doublebee_dctrl_baseline accepts it; the older
+        # controllers would raise TypeError, so pass it conditionally.
+        _extra = {}
+        if hasattr(env._decoupled_ctrl, "t_step_boost"):
+            _extra["step_ahead"] = step_ahead_val
         out = env._decoupled_ctrl.control(
             theta=theta, theta_dot=theta_dot, v=v_fwd,
             v_desired=v_desired,
             theta_desired=theta_desired,
             yaw_rate=yaw_rate_actual,
             yaw_rate_desired=0.0,
-            yaw=yaw_actual - bearing_to_target,
+            yaw=float(np.arctan2(np.sin(heading_w - bearing_to_target),
+                                 np.cos(heading_w - bearing_to_target))),
             yaw_gain_scale=(1.0 + 1.5 * env._recent_step_max),
+            **_extra,
         )
 
         pwm = mpc.thrust_to_pwm(out["T"])
@@ -976,6 +1039,7 @@ def main():
             _gain = float(_p[0, 2] - _cl_spawn[0, 2])
             _cl_maxgain = max(_cl_maxgain, _gain)
             _disp = float(torch.norm(_p[0, :2] - _cl_spawn[0, :2]))
+            _cl_maxdisp = max(_cl_maxdisp, _disp)
             _cl_run = _cl_run + 1 if _gain >= _cl_up_th else 0
             if _cl_run >= _cl_hold_steps and _disp >= args_cli.climb_min_xy:
                 _cl_cleared = True
@@ -985,10 +1049,14 @@ def main():
                     "max_gain_m": round(_cl_maxgain, 4),
                     "energy_J": round(float(_cl_base.episode_energy_buf[0]), 2),
                     "steps": int(_cl_steps),
+                    "max_disp_m": round(_cl_maxdisp, 3),
+                    "toward_goal_m": round(_cl_d0 - _goal_dist(_p), 3),
                 })
                 print("\r[climb] %d/%d" % (len(_cl_rows), args_cli.climb_episodes),
                       end="", flush=True)
                 _cl_spawn = _p.clone()
+                _cl_d0 = _goal_dist(_cl_spawn)
+                _cl_maxdisp = 0.0
                 _cl_run, _cl_cleared, _cl_maxgain, _cl_steps = 0, False, 0.0, 0
                 if len(_cl_rows) >= args_cli.climb_episodes:
                     with open(args_cli.climb_out, "w", newline="") as _f:

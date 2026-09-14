@@ -47,6 +47,17 @@ parser.add_argument("--cam_lookat", type=float, nargs=3, default=[0.0, 0.0, 0.0]
                     metavar=("X", "Y", "Z"), help="camera target, same frame")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument(
+    "--render_res",
+    type=int,
+    nargs=2,
+    default=None,
+    metavar=("W", "H"),
+    help="Render resolution for --video. ViewerCfg defaults to 1280x720, so a "
+         "recorded frame is 720p however large the window looks. Pass e.g. "
+         "3840 2160 for figure stills: rendering large gives real detail, "
+         "where upscaling a 720p frame afterwards only invents it.",
+)
+parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate (default: 1 for inference/play mode).")
@@ -337,6 +348,9 @@ def main():
     # create isaac environment
     if args_cli.cam_follow or args_cli.cam_eye != [2.0, 0.0, 0.5] \
             or args_cli.cam_lookat != [0.0, 0.0, 0.0]:
+        if args_cli.render_res is not None:
+            env_cfg.viewer.resolution = tuple(args_cli.render_res)
+            print("[INFO] render resolution %dx%d" % tuple(args_cli.render_res))
         env_cfg.viewer.eye = tuple(args_cli.cam_eye)
         env_cfg.viewer.lookat = tuple(args_cli.cam_lookat)
         if args_cli.cam_follow:
@@ -536,7 +550,13 @@ def main():
                 prim_path="/Visuals/TargetMarkers",
                 markers={
                     "target": sim_utils.SphereCfg(
-                        radius=0.15,  # 30cm radius sphere (increased from 15cm for better visibility)
+                        # Render-only. 0.15 was a 15 cm RADIUS (30 cm across),
+                        # and with TARGET_Z_VIS_OFFSET at 0.10 the sphere's
+                        # bottom sat 5 cm UNDER the surface. 0.08 clears it and
+                        # is less obtrusive. Raising the offset instead would
+                        # displace the ball horizontally by offset/tan(camera
+                        # elevation); see TARGET_Z_VIS_OFFSET's history.
+                        radius=float(os.environ.get("DOUBLEBEE_TARGET_BALL_R", 0.08)),
                         visual_material=sim_utils.PreviewSurfaceCfg(
                             diffuse_color=(1.0, 0.0, 0.0),  # Red color
                             metallic=0.0,
@@ -555,7 +575,10 @@ def main():
     # Setup command velocity arrow visualizer
     cmd_vel_arrow_visualizer = None
     actual_vel_arrow_visualizer = None
-    if is_doublebee_velocity:
+    # DOUBLEBEE_NO_ARROWS=1 hides the blue/green velocity arrows for clean figure
+    # renders (2026-09-13). Default unchanged: arrows are drawn.
+    _no_arrows = os.environ.get("DOUBLEBEE_NO_ARROWS", "0") not in ("0", "", "false", "False")
+    if is_doublebee_velocity and not _no_arrows:
         try:
             # Create a blue arrow marker for command velocity
             cmd_vel_arrow_cfg = BLUE_ARROW_X_MARKER_CFG.replace(
@@ -825,6 +848,28 @@ def main():
             print(f"[TARGET] target_xyz={target.cpu().numpy().round(3)} "
                 f"robot_xyz={robot_pos.cpu().numpy().round(3)} "
                 f"height_diff={target[2].item()-robot_pos[2].item():.3f}m", flush=True)
+            # DOUBLEBEE_POSE_LOG=1: per-step tilt, heading and wheel contact, for
+            # picking figure frames where the robot is upright with both wheels
+            # down (2026-09-13). Contact uses the same test as the policy's
+            # wheel-contact observation: per-wheel net force > 1 N. Default OFF.
+            if os.environ.get("DOUBLEBEE_POSE_LOG", "0") not in ("0", "", "false", "False"):
+                try:
+                    _rb = env.unwrapped.scene["robot"]
+                    _g = _rb.data.projected_gravity_b[0]
+                    _tilt = float(torch.rad2deg(torch.acos(torch.clamp(-_g[2], -1.0, 1.0))))
+                    _w, _x, _y, _z = (float(v) for v in _rb.data.root_quat_w[0])
+                    # heading of the body FORWARD axis (+Y) in world, deg from +X
+                    _hd = math.degrees(math.atan2(1 - 2 * (_x * _x + _z * _z), 2 * (_x * _y - _w * _z)))
+                    _cs = env.unwrapped.scene.sensors["contact_forces"]
+                    # Index by the SENSOR's own body order. Using the articulation's
+                    # body indices read zero force on both wheels at all times
+                    # (2026-09-13): the two orderings differ.
+                    _li = _cs.find_bodies("leftWheel")[0][0]; _ri = _cs.find_bodies("rightWheel")[0][0]
+                    _f = torch.norm(_cs.data.net_forces_w[0], dim=-1)
+                    print("[POSE] tilt=%.2f heading=%.1f fL=%.2f fR=%.2f z=%.4f"
+                          % (_tilt, _hd, float(_f[_li]), float(_f[_ri]), float(robot_pos[2])), flush=True)
+                except Exception as _e:
+                    print("[POSE] error %s" % _e, flush=True)
 
         terrain = env.unwrapped.scene.terrain
         origins = terrain.terrain_origins  # shape [num_rows, num_cols, 3]
