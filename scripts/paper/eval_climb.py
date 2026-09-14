@@ -350,6 +350,11 @@ def main():
     # stayed up; if it decays to ~0 the robot went up and came back down, and
     # max_gain alone would have called that a climb.
     last_gain = torch.zeros(n, device=dev)
+    # Body pitch, for choosing which checkpoint to render a figure from and for
+    # quantifying the forward lean in the discussion. Accumulated over LIVE
+    # steps only, same as everything else here.
+    pitch_sum = torch.zeros(n, device=dev)
+    pitch_max = torch.zeros(n, device=dev)
     steps = torch.zeros(n, device=dev)
     rows = []
 
@@ -381,6 +386,12 @@ def main():
             gain = pos[:, 2] - spawn[:, 2]
             disp = torch.norm(pos[:, :2] - spawn[:, :2], dim=1)
 
+            q = robot.data.root_quat_w          # (w, x, y, z)
+            pitch = torch.rad2deg(torch.asin(torch.clamp(
+                2.0 * (q[:, 0] * q[:, 2] - q[:, 3] * q[:, 1]), -1.0, 1.0))).abs()
+            pitch_sum += pitch * af
+            pitch_max = torch.where(alive, torch.maximum(pitch_max, pitch), pitch_max)
+
             max_gain = torch.where(alive, torch.maximum(max_gain, gain), max_gain)
             max_disp = torch.where(alive, torch.maximum(max_disp, disp), max_disp)
             last_gain = torch.where(alive, gain, last_gain)
@@ -406,6 +417,9 @@ def main():
                     "hold_s": round(float(max_run[k].item()) * base.step_dt, 3),
                     "max_disp_m": round(float(max_disp[k].item()), 3),
                     "end_gain_m": round(float(last_gain[k].item()), 4),
+                    "pitch_mean_deg": round(float(
+                        pitch_sum[k].item() / max(1.0, steps[k].item())), 2),
+                    "pitch_max_deg": round(float(pitch_max[k].item()), 2),
                     "end": why[k] if why[k] != "?" else "constraint_prob",
                 })
                 # reset this env's bookkeeping; it has already been respawned
@@ -418,6 +432,8 @@ def main():
                 max_run[k] = 0.0
                 max_disp[k] = 0.0
                 last_gain[k] = 0.0
+                pitch_sum[k] = 0.0
+                pitch_max[k] = 0.0
                 why[k] = "?"
             if rows:
                 print("\r[climb] %d/%d" % (len(rows), a.episodes), end="", flush=True)

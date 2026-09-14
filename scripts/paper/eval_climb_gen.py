@@ -407,8 +407,11 @@ def main():
                 if a.traj_out and k < ntrack:
                     reached = 1 if why[k] == "goal_reached" else 0
                     dist = float(max_disp[k].item())
-                    if len(buf[k]) > 10 and (reached, dist) > best_key:
-                        best_key, best_traj = (reached, dist), list(buf[k])
+                    # env.step() resets a finished env BEFORE we read pos, so
+                    # the sample appended on the done-step is the NEW spawn and
+                    # reads as all zeros. Drop it.
+                    if len(buf[k]) > 11 and (reached, dist) > best_key:
+                        best_key, best_traj = (reached, dist), list(buf[k][:-1])
                     buf[k] = []
 
                 # reset this env's bookkeeping; it has already been respawned
