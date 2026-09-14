@@ -35,17 +35,36 @@ GREEK = {"alpha": r"$\alpha$", "beta": r"$\beta$", "gamma": r"$\gamma$",
 C_DIST, C_Z, C_PITCH = "#1f5fa9", "#2e8b57", "#c0392b"
 
 
-def pitch_rank(eval_dir, tag):
-    """(checkpoint, mean pitch) sorted by mean pitch, lowest first."""
-    out = []
+def pitch_rank(eval_dir, tag, min_frac=0.5):
+    """Checkpoints sorted by mean pitch, but only ones that DO THE TASK.
+
+    Pitch and climbing are coupled: you lean in order to climb. Measured on the
+    ascending ramp, the most upright checkpoint (2.5 deg) is also the worst
+    climber, reaching the goal in 6% of episodes against 77% for the best. So
+    "lowest pitch" alone selects a policy that stands up straight by not
+    attempting the task, which is exactly the figure nobody should publish.
+
+    Candidates are first restricted to those within `min_frac` of the best
+    goal-reached rate, and only then sorted by pitch. Returns
+    (ckpt, mean_pitch, goal_pct, kept) with the rejects marked.
+    """
+    stats = []
     for f in sorted(glob.glob(os.path.join(eval_dir, "climb_%s_*.csv" % tag))):
         rows = list(csv.DictReader(open(f)))
         if not rows or "pitch_mean_deg" not in rows[0]:
             continue
         m = re.search(r"_(\d+)\.csv$", f)
-        out.append((m.group(1) if m else "?",
-                    float(np.mean([float(r["pitch_mean_deg"]) for r in rows]))))
-    return sorted(out, key=lambda q: q[1])
+        ends = [r["end"] for r in rows]
+        stats.append((m.group(1) if m else "?",
+                      float(np.mean([float(r["pitch_mean_deg"]) for r in rows])),
+                      100.0 * ends.count("goal_reached") / len(rows)))
+    if not stats:
+        return []
+    best = max(q[2] for q in stats)
+    cut = min_frac * best
+    kept = [(c, p, g, True) for c, p, g in stats if g >= cut]
+    drop = [(c, p, g, False) for c, p, g in stats if g < cut]
+    return sorted(kept, key=lambda q: q[1]) + sorted(drop, key=lambda q: q[1])
 
 
 def load_traj(traj_dir, tag, ckpt):
@@ -56,8 +75,15 @@ def load_traj(traj_dir, tag, ckpt):
     if len(r) < 5:
         return None
     f = lambda k: np.array([float(x[k]) for x in r])
-    t, x, y, z = f("t"), f("x"), f("y"), f("z")
-    return dict(t=t, dist=np.hypot(x, y), z=z, pitch=f("pitch_deg"))
+    t, x, y, z, pi = f("t"), f("x"), f("y"), f("z"), f("pitch_deg")
+    d = np.hypot(x, y)
+    # Trailing post-reset samples read as exactly 0 on every channel, or snap
+    # back toward the spawn. Trim any tail that collapses relative to the run.
+    keep = len(d)
+    while keep > 2 and d[keep - 1] < 0.5 * d[: keep - 1].max():
+        keep -= 1
+    sl = slice(0, keep)
+    return dict(t=t[sl], dist=d[sl], z=z[sl], pitch=pi[sl])
 
 
 def main():
@@ -77,7 +103,13 @@ def main():
     cols = []
     for tag in order:
         rank = pitch_rank(a.eval_dir, tag)
-        pick, mp = (a.ckpt, float("nan")) if a.ckpt else (rank[0] if rank else (None, None))
+        usable = [q for q in rank if q[3]]
+        if a.ckpt:
+            pick, mp = a.ckpt, float("nan")
+        elif usable:
+            pick, mp = usable[0][0], usable[0][1]
+        else:
+            pick, mp = (None, None)
         if pick is None:
             print("  %-14s no eval CSVs, skipped" % tag)
             continue
@@ -120,8 +152,12 @@ def main():
         print("  %-14s ckpt %s  mean pitch %.1f deg  |  %.2f m in %.1f s, dz %+.3f m"
               % (tag, pick, mp, tr["dist"][-1], tr["t"][-1], tr["z"][-1]))
         if rank and not a.ckpt:
-            print("      pitch ranking: %s" % "  ".join(
-                "%s:%.1f" % q for q in rank[:5]))
+            print("      candidates (pitch, goal%%): %s" % "  ".join(
+                "%s:%.1f/%.0f%%" % (c, p, g) for c, p, g, k in rank if k))
+            rej = [q for q in rank if not q[3]]
+            if rej:
+                print("      excluded, too few goals: %s" % "  ".join(
+                    "%s:%.1f/%.0f%%" % (c, p, g) for c, p, g, k in rej))
 
     fig.tight_layout(pad=0.4)
     fig.savefig(a.out, bbox_inches="tight")

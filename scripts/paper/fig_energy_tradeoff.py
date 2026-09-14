@@ -157,9 +157,21 @@ def main():
                         "episode cloud is dropped and the sparse top bin "
                         "pooled, because 5 arms x 4 bins of scatter in 1.6in "
                         "is a smear.")
+    p.add_argument("--dots", action="store_true",
+                   help="draw the per-episode cloud in the 'sbs' layout. Off by "
+                        "default because 5 arms x 4 bins of scatter in 1.6in is "
+                        "a smear; with the top bin pooled to 3 bins it fits, "
+                        "subsampled and faint, behind the means.")
+    p.add_argument("--caps", action="store_true",
+                   help="capitalise the first letter of each axis label")
     p.add_argument("--min_n", type=int, default=5,
                    help="cells with fewer episodes than this get no mean marker")
     a = p.parse_args()
+
+    _ybounds = []
+
+    def _L(t):
+        return (t[0].upper() + t[1:]) if a.caps and t else t
 
     arms = load(a.pattern)
     groups = group(arms)
@@ -178,6 +190,10 @@ def main():
                                gridspec_kw=dict(width_ratios=[1.55, 1.0]))
         st = dict(pt=2.0, ptalpha=0.0, ms=3.2, elw=0.8, cap=1.4, big=26,
                   fs=6.5, tick=6.0, leg=6.0, title=7.0, show=0, ncol=5)
+        if a.dots:
+            # small, faint and subsampled: enough to show the spread the error
+            # bars summarise, not enough to compete with the means.
+            st.update(pt=1.6, ptalpha=0.16, show=30)
     elif a.layout == "column":
         fig, ax = plt.subplots(2, 1, figsize=(3.4, 4.7),
                                gridspec_kw=dict(height_ratios=[1.35, 1.0]))
@@ -221,19 +237,48 @@ def main():
                 ax[0].scatter(x, ei, s=st["pt"], alpha=st["ptalpha"], color=c,
                               linewidths=0, zorder=2)
             if m.sum() >= a.min_n:
-                ax[0].errorbar(k + offs[i], e[m].mean(), yerr=e[m].std(),
+                # Interval is the standard ERROR across CHECKPOINTS, not the
+                # spread across pooled episodes. Two reasons. The claim is
+                # about the arm's mean, so the uncertainty in that mean is what
+                # belongs on it. And pooled episodes are not independent
+                # samples: they come from ten checkpoints of one run, so an
+                # episode-level interval is the wrong width in both directions.
+                per_ck = []
+                for f_ in files:
+                    _, _, gi_, ei_, _, _, _, _, _ = f_
+                    ri_ = np.minimum(
+                        np.floor(gi_ / a.step + 1e-9).astype(int), cap)
+                    mi_ = ri_ == k
+                    if mi_.sum() >= 3:
+                        per_ck.append(ei_[mi_].mean())
+                mu = e[m].mean()
+                sd = (np.std(per_ck, ddof=1) / np.sqrt(len(per_ck))
+                      if len(per_ck) > 1 else 0.0)
+                _ybounds.append((mu - sd, mu + sd))
+                ax[0].errorbar(k + offs[i], mu, yerr=sd,
                                fmt="o", ms=st["ms"], color=c, ecolor=c,
                                elinewidth=st["elw"], capsize=st["cap"],
                                mec="0.15", mew=0.7, zorder=4)
+    if a.dots and _ybounds:
+        # The cloud spans far more than the means do, and letting it drive the
+        # y limits compresses the very separation the panel exists to show.
+        # Frame on the mean +- sd envelope and let the outer scatter clip.
+        lo = min(q[0] for q in _ybounds)
+        hi = max(q[1] for q in _ybounds)
+        pad = 0.12 * (hi - lo)
+        ax[0].set_ylim(lo - pad, hi + pad)
     for k in range(cap):
         ax[0].axvline(k + 0.5, color="0.85", lw=0.8, zorder=0)
     ax[0].set_xticks(range(cap + 1))
     ax[0].set_xticklabels([str(k) for k in range(cap)] + ["%d+" % cap])
     ax[0].set_xlim(-0.5 - dx, cap + 0.5 + dx)
-    _xl0 = ("peak height (%.0f cm bins)" if a.layout == "sbs"
-            else "peak height reached (%.0f cm bins)")
-    ax[0].set_xlabel(_xl0 % (100 * a.step), fontsize=st["fs"])
-    ax[0].set_ylabel("energy per episode (J)", fontsize=st["fs"])
+    # The bins ARE steps: floor(gain / step), capped. The old label,
+    # "peak height (6 cm bins)", made a reader decode that and used height
+    # where the paper says step. Bare "steps climbed" fixed the wording but
+    # dropped how tall a step is, so the height stays in the label.
+    _xl0 = "%.0f cm steps climbed"
+    ax[0].set_xlabel(_L(_xl0 % (100 * a.step)), fontsize=st["fs"])
+    ax[0].set_ylabel(_L("energy per episode (J)"), fontsize=st["fs"])
     if a.layout != "sbs":
         ax[0].set_title("Energy per episode, by height reached",
                         fontsize=st["title"], loc="left")
@@ -256,10 +301,11 @@ def main():
     # ---- (b) the trade-off, which is (a) aggregated ------------------------
     pts, labs, cols, errs = [], [], [], []
     for (w, lab, files), c in zip(groups, cmap):
-        # One (cost, rate) per CHECKPOINT, then mean and sd across them. The
-        # error bars are the honest statement of what a single-checkpoint number
-        # was hiding; they are checkpoint spread, not seed spread, and the
-        # caption has to say so.
+        # One (cost, rate) per CHECKPOINT, then mean and standard error across
+        # them. Bars are the uncertainty in the arm MEAN, which is what every
+        # claim in the text is about; they are checkpoint-based, not seed-based,
+        # and the caption has to say so. Successive checkpoints of one run are
+        # not fully independent, so this is a mild underestimate.
         per = []
         for f in files:
             _, _, gi, ei, cli, hsi, dpi, egi, eni = f
@@ -272,7 +318,10 @@ def main():
         cst = np.array([q[0] for q in per])
         rte = np.array([q[1] for q in per])
         pts.append((cst.mean(), rte.mean()))
-        errs.append((cst.std(), rte.std()))
+        # Standard error of the mean, matching panel (a). See the note there.
+        nck = max(1, len(cst))
+        errs.append((cst.std(ddof=1) / np.sqrt(nck),
+                     rte.std(ddof=1) / np.sqrt(nck)))
         labs.append("%g" % w if w == w else lab)
         cols.append(c)
     if pts:
@@ -305,10 +354,10 @@ def main():
         ymid = 0.5 * sum(ax[1].get_ylim())
         _xl1 = ("energy at %.0f cm (J)" if a.layout == "sbs"
                 else "energy per episode reaching %.0f cm (J)")
-        ax[1].set_xlabel(_xl1 % (100 * a.step), fontsize=st["fs"])
-        _yl1 = ("reaching %.0f cm (%%)" if a.layout == "sbs"
+        ax[1].set_xlabel(_L(_xl1 % (100 * a.step)), fontsize=st["fs"])
+        _yl1 = ("clears a %.0f cm step (%%)" if a.layout == "sbs"
                 else "episodes reaching %.0f cm (%%)")
-        ax[1].set_ylabel(_yl1 % (100 * a.step), fontsize=st["fs"])
+        ax[1].set_ylabel(_L(_yl1 % (100 * a.step)), fontsize=st["fs"])
         if a.layout != "sbs":
             ax[1].legend(fontsize=st["leg"], loc="lower right")
     if a.layout != "sbs":
@@ -344,7 +393,8 @@ def main():
     print("\n%-8s %5s %5s %18s %16s %8s %9s" %
           ("wE", "ckpt", "n", "reach% mean+-sd", "E_reach(J)+-sd", "tilt%",
            "gain_med"))
-    print("  +-sd is spread across CHECKPOINTS of one run, not across seeds.")
+    print("  +- is the standard error across the ten CHECKPOINTS of one run,")
+    print("  not across seeds. Checkpoints are correlated, so it underestimates.")
     for w, lab, files in groups:
         g, e, cl, hs, dp, eg, en = pooled(files)
         m = climbed(g, hs, dp, eg, a.step, a.hold_s, a.min_xy)
