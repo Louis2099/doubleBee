@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import os
+
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import DelayedPDActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
@@ -18,11 +20,19 @@ DOUBLEBEE_CFG = ArticulationCfg(
         visible=True,  # Ensure visibility is enabled
         # scale=(1.0, 1.0, 1.0),  # Convert cm to meters (USD was created in cm)
         scale=(0.001, 0.001, 0.001),  # Convert cm to meters (USD was created in cm)
+        # Render-only. Both settable so the robot can be separated from the
+        # terrain colour without editing this file:
+        #   DOUBLEBEE_ROBOT_RGB=0.95,0.45,0.10   warmer, reads on dark ground
+        #   DOUBLEBEE_ROBOT_EMISSIVE=0.25,0.12,0.02   self-lit, pops in shadow
+        # Emissive is the more effective of the two against a dark terrain: it
+        # does not depend on the dome light reaching the robot.
         visual_material=sim_utils.PreviewSurfaceCfg(
-            diffuse_color=(0.9, 0.7, 0.3),  # Brighter orange/yellow
+            diffuse_color=tuple(float(v) for v in os.environ.get(
+                "DOUBLEBEE_ROBOT_RGB", "0.9,0.7,0.3").split(",")),
             metallic=0.0,  # No metallic (metals appear black without proper lighting)
             roughness=0.4,  # Some roughness for better visibility
-            emissive_color=(0.1, 0.05, 0.0),  # Slight glow
+            emissive_color=tuple(float(v) for v in os.environ.get(
+                "DOUBLEBEE_ROBOT_EMISSIVE", "0.1,0.05,0.0").split(",")),
         ),
         # NOTE: doubleBee_merged.usd (loaded above) = the model that can rotate,
         # plus weighed mass and measured CoM. doubleBee_modified.usd has an
@@ -250,7 +260,13 @@ DOUBLEBEE_CFG = ArticulationCfg(
             #
             # 2.0 is the value in every run that ever produced a working
             # checkpoint, including model_3500.
-            velocity_limit=2.0,
+            #
+            # DOUBLEBEE_SERVO_VEL_LIMIT overrides it at EVALUATION time so the
+            # cost of this modelling gap can be measured rather than guessed:
+            # the hardware servos do 10 rad/s. Setting it for TRAINING is the
+            # thing the note above says does not work. Default is unchanged, so
+            # every existing run and checkpoint is unaffected.
+            velocity_limit=float(os.environ.get("DOUBLEBEE_SERVO_VEL_LIMIT", 2.0)),
             min_delay=2, # guessed, in sim steps at 0.02s = 40-100ms lag
             max_delay=5, # guessed
             stiffness={

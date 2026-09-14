@@ -230,6 +230,12 @@ def main():
                         "use the play terrain unchanged, which is what you want: "
                         "pinning breaks the spawn/target patch sampling.")
     p.add_argument("--episodes", type=int, default=60)
+    # 2026-09-14: optional seed. Without it every launch samples a different set
+    # of target flat patches, and one checkpoint x setting x height swung from
+    # 20 % to 83 % clearance across three launches. With --seed, launch k sees
+    # the same terrain patches and goal draws for every arm, so comparisons are
+    # paired. Default None keeps every existing result reproducible.
+    p.add_argument("--seed", type=int, default=None)
     p.add_argument("--num_envs", type=int, default=64)
     p.add_argument("--hold", type=float, default=0.5,
                    help="seconds the height gain must be held; separates climbing "
@@ -265,6 +271,13 @@ def main():
     from isaaclab_tasks.utils import parse_env_cfg, load_cfg_from_registry
 
     env_cfg = parse_env_cfg(a.task, num_envs=a.num_envs)
+    if a.seed is not None:
+        import random
+        import numpy as _np
+        random.seed(a.seed); _np.random.seed(a.seed)
+        torch.manual_seed(a.seed); torch.cuda.manual_seed_all(a.seed)
+        env_cfg.seed = a.seed
+        print("[climb] seed %d" % a.seed, flush=True)
 
     # DO NOT pin the terrain by default.
     #

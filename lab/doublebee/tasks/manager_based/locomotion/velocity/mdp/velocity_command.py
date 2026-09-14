@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 from typing import TYPE_CHECKING, Sequence
 
@@ -35,7 +37,12 @@ from isaaclab.utils import configclass
 # it. Do NOT keep raising it: apparent horizontal displacement at the ~17 deg
 # play camera is offset / tan(17 deg) = 3.27x the offset, so 0.10 already shifts
 # the ball ~33 cm on screen. That illusion is what cost a day at 0.3.
-TARGET_Z_VIS_OFFSET = 0.10
+# 2026-09-10: settable for figure renders via DOUBLEBEE_TARGET_VIS_Z. The
+# horizontal illusion above scales as offset / tan(camera elevation), so it
+# VANISHES for the level side camera used in the generalization renders
+# (cam_eye and cam_lookat at equal z) and returns the moment the camera is
+# tilted down again. Raise it for a render, leave the default alone.
+TARGET_Z_VIS_OFFSET = float(os.environ.get("DOUBLEBEE_TARGET_VIS_Z", 0.10))
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -199,11 +206,11 @@ class TerrainTargetDirectionCommand(UniformVelocityCommand):
         # Flat patches are stored with Z=0 relative to terrain base, but they may be on steps
         # at various heights. Since we can't query the actual terrain height here, we use
         # a fixed offset that approximates the average step height.
-        # NOT visualization-only, despite what this comment used to say.
-        # constraints.py::goal_reached subtracts the offset and checks at_height
-        # against it, and rewards.py::reach_terrain_target multiplies by a
-        # height_factor computed from this Z WITHOUT subtracting it. Changing
-        # this constant changes the reward landscape, not just the picture.
+        # 2026-09-10: this comment was STALE and contradicted the header.
+        # Both consumers DO subtract the offset: constraints.py::goal_reached
+        # before checking at_height, and rewards.py::reach_terrain_target at
+        # line ~562, "current_targets_w[:,2] - TARGET_Z_VIS_OFFSET +
+        # ROBOT_STAND_Z". So the constant is cosmetic, as the header says.
         target_world[:, 2] += TARGET_Z_VIS_OFFSET
 
         self.current_targets_w[idx, :] = target_world

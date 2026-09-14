@@ -10,13 +10,21 @@ import gymnasium as gym
 from . import agents
 from .flat_env.hybrid_stair.hybrid_stair_cfg import (
     DoubleBeeHybridStairCfg, DoubleBeeHybridStairCfg_PLAY, DoubleBeeHybridStairConstantThrustCfg,
+    DoubleBeeHybridStairSwitchedThrustCfg,
     DoubleBeeHybridStairWheelsOnlyCfg,
     DoubleBeeHybridStairWheelsServosCfg,
     DoubleBeeHybridStairPropellerOnlyCfg,
     DoubleBeeHybridStairConstantThrustCfg_PLAY,
+    DoubleBeeHybridStairSwitchedThrustCfg_PLAY,
     DoubleBeeHybridStairWheelsOnlyCfg_PLAY,
     DoubleBeeHybridStairWheelsServosCfg_PLAY,
     DoubleBeeHybridStairPropellerOnlyCfg_PLAY,
+    DoubleBeeGenRoughCfg_PLAY,
+    DoubleBeeGenSlopeUpCfg_PLAY,
+    DoubleBeeGenSlopeDownCfg_PLAY,
+    DoubleBeeGenStairDownCfg_PLAY,
+    DoubleBeeGenWaveCfg_PLAY,
+    DoubleBeeGenNarrowCfg_PLAY,
 )
 from .flat_env.inverted_pendulum import DoubleBeeInvertedPendulumCfg, DoubleBeeInvertedPendulumCfg_PLAY
 from .velocity_env_cfg import DoubleBeeVelocityEnvCfg
@@ -63,6 +71,26 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": DoubleBeeHybridStairConstantThrustCfg,
+        "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+    },
+)
+
+
+# MODE-SWITCHING BASELINE, 2026-09-11. The baseline IROS R1 actually asked for:
+# thrust switched between two fixed levels by a hand-written threshold on the
+# height scan, i.e. "drive when possible, fly otherwise" with a hand-chosen
+# trigger. The constant-thrust arm above removes modulation entirely; this one
+# replaces continuous modulation with DISCRETE modulation, which is the
+# architecture the introduction argues against. Knobs are environment
+# variables: DOUBLEBEE_SWITCH_{LOW,HIGH,THRESH,LOOKAHEAD,LATCH}.
+gym.register(
+    id="Isaac-Velocity-HybridStair-DoubleBee-SwitchThrust-v1-ppo",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": DoubleBeeHybridStairSwitchedThrustCfg,
         "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
         "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
         "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
@@ -150,6 +178,7 @@ __all__ = ["DoubleBeeVelocityEnvCfg"]
 # action widths differ (39/2, 40/3, 39/2 against 41/4).
 for _sfx, _cfg in (
     ("ConstThrust", DoubleBeeHybridStairConstantThrustCfg_PLAY),
+    ("SwitchThrust", DoubleBeeHybridStairSwitchedThrustCfg_PLAY),
     ("WheelsOnly", DoubleBeeHybridStairWheelsOnlyCfg_PLAY),
     ("WheelsServos", DoubleBeeHybridStairWheelsServosCfg_PLAY),
     ("PropellerOnly", DoubleBeeHybridStairPropellerOnlyCfg_PLAY),
@@ -165,3 +194,77 @@ for _sfx, _cfg in (
             "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
         },
     )
+
+# Zero-shot generalization terrains (stair-trained policy, unseen ground).
+
+gym.register(
+    id="Isaac-Velocity-HybridStair-DoubleBee-GenRough-Play-v1-ppo",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": DoubleBeeGenRoughCfg_PLAY,
+        "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+    },
+)
+
+gym.register(
+    id="Isaac-Velocity-HybridStair-DoubleBee-GenSlopeUp-Play-v1-ppo",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": DoubleBeeGenSlopeUpCfg_PLAY,
+        "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+    },
+)
+
+gym.register(
+    id="Isaac-Velocity-HybridStair-DoubleBee-GenSlopeDown-Play-v1-ppo",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": DoubleBeeGenSlopeDownCfg_PLAY,
+        "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+    },
+)
+
+gym.register(
+    id="Isaac-Velocity-HybridStair-DoubleBee-GenStairDown-Play-v1-ppo",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": DoubleBeeGenStairDownCfg_PLAY,
+        "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+    },
+)
+
+gym.register(
+    id="Isaac-Velocity-HybridStair-DoubleBee-GenWave-Play-v1-ppo",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": DoubleBeeGenWaveCfg_PLAY,
+        "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+    },
+)
+
+gym.register(
+    id="Isaac-Velocity-HybridStair-DoubleBee-GenNarrow-Play-v1-ppo",
+    entry_point="lab.doublebee.isaaclab.isaaclab.envs.manager_based_constraint_rl_env:ManagerBasedConstraintRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": DoubleBeeGenNarrowCfg_PLAY,
+        "co_rl_cfg_entry_point": agents.co_rl_cfg.DoubleBeeCoRlCfg,
+        "co_rl_tqc_cfg_entry_point": agents.co_rl_tqc_cfg.DoubleBeeCoRlTqcCfg,
+        "co_rl_sac_cfg_entry_point": agents.co_rl_sac_cfg.DoubleBeeCoRlSacCfg,
+    },
+)

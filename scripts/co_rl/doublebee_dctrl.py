@@ -15,6 +15,7 @@ Plug into play.py the same way as the MPC: each step, read state, call
 decoupled_control(), apply the action.
 """
 
+import os
 import numpy as np
 
 
@@ -118,9 +119,16 @@ class DecoupledController:
         # --- gain-scheduled balance term (needed before eq23 below) ---
         # Near upright (small theta), thrust has almost no lever arm, so the
         # WHEELS must do the balancing there, like a normal balance bot.
-        balance_authority = float(np.clip(1.0 - abs(theta) / np.radians(20), 0.0, 1.0))
-        Kb_p = 5.0 # was 8.0
-        Kb_d = 1.0 # was 1.5
+        # 2026-09-13: the three numbers below are now settable from the
+        # environment. DEFAULTS ARE UNCHANGED, so this file behaves exactly as
+        # before unless a variable is set. Added because authority fading to
+        # zero at 20 deg means nothing arrests a lean past that point, and the
+        # statics say thrust restores direction but not RATE, so the damping
+        # has to come from the wheels.
+        _blend_deg = float(os.environ.get("DOUBLEBEE_OG_BLEND_DEG", 20.0))
+        balance_authority = float(np.clip(1.0 - abs(theta) / np.radians(_blend_deg), 0.0, 1.0))
+        Kb_p = float(os.environ.get("DOUBLEBEE_OG_KB_P", 5.0))   # was 8.0
+        Kb_d = float(os.environ.get("DOUBLEBEE_OG_KB_D", 1.0))   # was 1.5
         wheel_balance_term = Kb_p * theta + Kb_d * theta_dot
 
         # --- eq 23: wheel torque from desired velocity ---

@@ -24,6 +24,7 @@ from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp.velocity_command 
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import ActionsCfg4D
 from lab.doublebee.tasks.manager_based.locomotion.velocity.mdp import (
     ActionsCfg4DConstantThrust,
+    ActionsCfg4DSwitchedThrust,
     ActionsCfg4DPropellerOnly,
     ActionsCfgWheelsOnly4D,
     ActionsCfgWheelsServosOnly4D,
@@ -522,6 +523,28 @@ class DoubleBeeHybridStairConstantThrustCfg(DoubleBeeHybridStairCfg):
 
 
 @configclass
+class DoubleBeeHybridStairSwitchedThrustCfg(DoubleBeeHybridStairCfg):
+    """MODE-SWITCHING BASELINE. Thrust switched between two fixed levels by a
+    hand-written threshold on the height scan.
+
+    The constant-thrust arm above answers "does modulation beat holding one
+    value". This answers the harder and more honest question IROS R1 actually
+    asked: how much better is the learned policy than a well-designed
+    mode-switching controller -- "drive when possible, fly otherwise", fired by
+    a threshold on perceived terrain, which is the architecture the paper's
+    introduction argues against.
+
+    Wheels and servos stay under policy control and are trained by the same
+    algorithm on the same reward, so the only thing removed is CONTINUOUS
+    thrust modulation, and what replaces it is discrete modulation. The trigger
+    reads the same height scanner the policy observes, undelayed, so the
+    baseline is if anything better informed. See SwitchedPropellerAction.
+    """
+
+    actions: ActionsCfg4DSwitchedThrust = ActionsCfg4DSwitchedThrust()
+
+
+@configclass
 class DoubleBeeHybridStairWheelsOnlyCfg(DoubleBeeHybridStairCfg):
     """ACTUATION ABLATION: wheels only. Servos and propellers are inert.
 
@@ -584,6 +607,13 @@ class DoubleBeeHybridStairConstantThrustCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
 
 
 @configclass
+class DoubleBeeHybridStairSwitchedThrustCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
+    """Mode-switching baseline on the play terrain."""
+
+    actions: ActionsCfg4DSwitchedThrust = ActionsCfg4DSwitchedThrust()
+
+
+@configclass
 class DoubleBeeHybridStairWheelsOnlyCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
     """Wheels only, on the play terrain."""
 
@@ -602,3 +632,92 @@ class DoubleBeeHybridStairPropellerOnlyCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
     """Propellers and servos, wheels inert, on the play terrain."""
 
     actions: ActionsCfg4DPropellerOnly = ActionsCfg4DPropellerOnly()
+
+
+# ---------------------------------------------------------------------------
+# ZERO-SHOT GENERALIZATION TERRAINS
+#
+# Not sim-to-sim: same engine, same robot, same actions and observations. Only
+# the terrain geometry changes, and none of these appear in training. Each
+# inherits DoubleBeeHybridStairCfg_PLAY and overrides ONLY scene.terrain, so a
+# stair-trained checkpoint loads unchanged and any difference in behaviour is
+# attributable to the ground.
+# ---------------------------------------------------------------------------
+
+
+@configclass
+class DoubleBeeGenRoughCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
+    """Irregular ground, no discrete steps."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.generalization_config import (
+            ROUGH_TERRAIN,
+        )
+        self.scene.terrain = ROUGH_TERRAIN
+        print("[INFO] GENERALIZATION terrain: irregular ground, no steps.")
+
+
+@configclass
+class DoubleBeeGenSlopeUpCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
+    """Continuous ascent, no discrete steps."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.generalization_config import (
+            SLOPE_UP_TERRAIN,
+        )
+        self.scene.terrain = SLOPE_UP_TERRAIN
+        print("[INFO] GENERALIZATION terrain: continuous slope, ascending.")
+
+
+@configclass
+class DoubleBeeGenSlopeDownCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
+    """Continuous descent, never seen in training in any form."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.generalization_config import (
+            SLOPE_DOWN_TERRAIN,
+        )
+        self.scene.terrain = SLOPE_DOWN_TERRAIN
+        print("[INFO] GENERALIZATION terrain: continuous slope, descending.")
+
+
+@configclass
+class DoubleBeeGenStairDownCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
+    """Descending discrete steps. Training is ascent only."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.generalization_config import (
+            STAIR_DOWN_TERRAIN,
+        )
+        self.scene.terrain = STAIR_DOWN_TERRAIN
+        print("[INFO] GENERALIZATION terrain: discrete steps, DESCENDING.")
+
+
+@configclass
+class DoubleBeeGenWaveCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
+    """Undulating ground: periodic pitch disturbance, no edges."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.generalization_config import (
+            WAVE_TERRAIN,
+        )
+        self.scene.terrain = WAVE_TERRAIN
+        print("[INFO] GENERALIZATION terrain: undulating waves.")
+
+
+@configclass
+class DoubleBeeGenNarrowCfg_PLAY(DoubleBeeHybridStairCfg_PLAY):
+    """Same ascending staircase, half the tread width (0.20 m vs 0.40 m)."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        from lab.doublebee.tasks.manager_based.locomotion.velocity.terrain_config.generalization_config import (
+            NARROW_TERRAIN,
+        )
+        self.scene.terrain = NARROW_TERRAIN
+        print("[INFO] GENERALIZATION terrain: ascending steps, 0.20 m tread.")
