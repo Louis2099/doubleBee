@@ -164,8 +164,8 @@ DOUBLEBEE_CFG = ArticulationCfg(
                 "rightWheel": 0.0,
             },
             armature={
-                "leftWheel": 0.01,
-                "rightWheel": 0.01,
+                "leftWheel": float(os.environ.get("DOUBLEBEE_WHEEL_ARMATURE", 0.01)),
+                "rightWheel": float(os.environ.get("DOUBLEBEE_WHEEL_ARMATURE", 0.01)),
             },
         ),
         
@@ -339,7 +339,7 @@ DOUBLEBEE_CFG = ArticulationCfg(
             # kg*m^2, 2080x too heavy) plus an armature of 0.01 (88x the real
             # propeller). Both are fixed now, so 5.0 N*m gives both a fast
             # spin-up and the full 200 rad/s ceiling.
-            effort_limit=5.0,  
+            effort_limit=float(os.environ.get("DOUBLEBEE_PROP_EFFORT", 5.0)),  
             velocity_limit=600.0,  # Increased velocity limit
             # Propellers are the BALANCE actuator and have the longest real lag
             # in the whole chain: MAVLink hop + ESC response + propeller spin-up
@@ -386,8 +386,8 @@ DOUBLEBEE_CFG = ArticulationCfg(
                 # while tau stays comfortably above the physics step. 0.025 gives
                 # more thrust but puts tau exactly at the step, where the loop
                 # starts oscillating again.
-                "leftPropeller": 0.015,
-                "rightPropeller": 0.015,
+                "leftPropeller": float(os.environ.get("DOUBLEBEE_PROP_DAMPING", 0.015)),
+                "rightPropeller": float(os.environ.get("DOUBLEBEE_PROP_DAMPING", 0.015)),
             },
             friction={
                 "leftPropeller": 0.0,
@@ -406,8 +406,8 @@ DOUBLEBEE_CFG = ArticulationCfg(
             # With 1e-5 the total is 1.24e-4 and 0.2 N*m gives ~1600 rad/s^2,
             # i.e. 200 rad/s in ~125 ms, which is what a real prop does.
             armature={
-                "leftPropeller": 1.0e-5,
-                "rightPropeller": 1.0e-5,
+                "leftPropeller": float(os.environ.get("DOUBLEBEE_PROP_ARMATURE", 1.0e-5)),
+                "rightPropeller": float(os.environ.get("DOUBLEBEE_PROP_ARMATURE", 1.0e-5)),
             },
         ),
     },
