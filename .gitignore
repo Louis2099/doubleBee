@@ -14,3 +14,14 @@ configuration/
 # *.usd
 *.tex
 *.bak
+
+# eval outputs and render artefacts (added 2026-09-18)
+abl_*/
+ablation_logs/
+actfix_eval/
+vids/
+renders/
+simprof/
+sweep_logs/
+*.log
+.bak_*
