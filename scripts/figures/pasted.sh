@@ -1,0 +1,28 @@
+cd ~/doublebee_PID_JAI/modified_mav_ros_src/src/mavros/mavros/srv && python3 db_inference.py \
+  --model_path ~/doublebee_PID_JAI/ckpts/hE4/model_5899.pt \
+  --wheel_action_scale 23.6 --wheel_scale 1.0 \
+  --wheel_scale_post 0.5 --post_climb_s 1.5 --post_climb_rise 0.03 \
+  --max_wheel_diff 0 \
+  --heading_hold_kp 0 \
+  --wheel_lpf_alpha 0.3 \
+  --wheel_ramp_s 0.3 \
+  --roboclaw_accel 13139 \
+  --rc_timeout 3.0 \
+  --sim_servo_limit_rad 0.7854 --servo_slew_rad_s 2.0 \
+  --servo_obs_source lowpass \
+  --servo_attitude_hold --servo_hold_sign -1.0 \
+  --servo_hold_blend 0.5 \
+  --servo_lpf_alpha 0.3 \
+  --servo_step_bias 0.3 --servo_bias_dist 0.10 \
+  --servo_hold_damping 0.15 --servo_hold_slew_rad_s 10.0 \
+  --contact 1.0 \
+  --action_scale 1.0 --prop_scale 2.0 --servo_scale 1.0 \
+  --prop_scale_step 5.0 --prop_step_relief 0.05 \
+  --prop_boost_dist 0.14 --prop_min_frac 0.5 \
+  --prop_map sim_damped --prewarm \
+  --step -0.55 9.7821 -1.6494 0.6227 0.0600 \
+  --step -0.35 9.9821 -1.6400 0.6300 0.1300 \
+  --step -0.15 10.1821 -1.6328 0.6393 0.2100 \
+  --target 1.15 -0.71 \
+  --base_z_offset 0.06575 \
+  --log_path ~/doublebee_PID_JAI/hw_final/trial_$(date +%H%M%S).csv

@@ -1,0 +1,20 @@
+- [DoubleBee paper status](doublebee-paper-status.md) — workshop version shipped as-is on purpose; ICRA fixes tracked in repo `ICRA_TODOS.md`
+- [No rewiring](doublebee-no-rewiring.md) — hardware frozen for final testing; fix wheel sign/index issues in software
+- [Actuation envelope](doublebee-actuation-envelope.md) — measured wheel/prop limits vs the wrong ones in the configs
+- [ICRA plan](doublebee-icra-plan.md) — TQC only (not PPO), stability-before-climbing gate, pendulum/delay numbers
+- [Hardware climbs](doublebee-hardware-climbs.md) — 2026-08-27: 11 cm over two risers on the real robot; RUN 1 beat its old sim peak
+- [Energy ablation redone](doublebee-energy-ablation.md) — pre-Sep-4 sweep void; warm-started, report penalty share not raw weight
+- [RoboClaw settings and wheel lag](doublebee-roboclaw-voltage-ceiling.md) — settings need WriteNVM or they revert; stock PID gave 300 ms wheel lag vs a 102 ms fall constant
+- [Ask before running commands](ask-before-running-commands.md) — propose, wait for go ahead; applies to the box and anywhere else
+- [Propeller thrust ceiling](doublebee-prop-thrust-ceiling.md) — sim props cap at T/W 0.5 vs model's 1.16+; explains hardware prop_scale 2-3
+- [Paper terminology](doublebee-paper-terminology.md) — say step/steps climbed, never riser
+- [Paper writing style](paper-writing-style.md) — natural prose, varied openers, no colons/semicolons, always show diff
+- [Eval variance](doublebee-eval-variance.md) — single-run reach numbers swing 15-25 pts; pool 10 ckpts, power is the stable statistic
+- [IROS reviews and response plan](doublebee-iros-reviews.md) — rejection reasons; the open one is the missing mode-switching baseline
+- [Baseline tuning metric](baseline-tuning-metric.md) — score sweeps on progress toward the goal, never on survival steps
+- [Clearance metric](doublebee-clearance-metric.md) — paper clears % = peak gain >= step height, not the CSV cleared column
+- [HW terrain commands](doublebee-hw-terrain-commands.md) — per-terrain deploy commands in hw_final/terrain_commands/; only trained geometry used the frozen one
+- [Actuator-matched training](doublebee-actfix-training.md) — 2026-09-14 from-scratch wE4 + wE0.25 runs with props ~560 rad/s, servo 10; not for the paper; code tag icra2027-submission
+- [Sim renders](doublebee-sim-renders.md) — SCAN_VIS / NO_ARROWS flags, 4K play render recipe, video overwrite trap
+- [Switched baseline results](doublebee-switched-baseline-results.md) — matched swA3/swB3 numbers vs hE4; sweep 83% outlier pooled to 24%, learned still leads at 6 cm
+- [Eval launch noise + Option B](doublebee-eval-launch-noise.md) — unseeded goal patches swing one cell 20-83%; --seed paired re-eval of learned/switch/fixed
